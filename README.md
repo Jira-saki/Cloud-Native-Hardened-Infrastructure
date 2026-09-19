@@ -11,11 +11,12 @@
 # Multi-Cloud Hardened Infrastructure — AWS EKS & GCP GKE
 
 🎯 Professional Roadmap & Certification Alignment
-Completed Milestones: 
+Completed Milestones:
 - ✅ CKA (Certified Kubernetes Administrator) — Certified (2026)
-- 🎯 PCA (Prometheus Certified Associate) — Full-stack Observability & CRDs validated in Phase 6
-Target Alignment:
-- 🔒 CKS (Certified Kubernetes Security Specialist) — Runtime hardening, Kyverno admission, & Bottlerocket immutability
+Active Study:
+- 🎯 CKS (Certified Kubernetes Security Specialist) — Runtime hardening, Kyverno admission control & Bottlerocket/COS immutability (in progress)
+Observability Evidence (PCA-aligned, no exam planned):
+- 📊 Full-stack Observability validated — ServiceMonitor, PrometheusRule, AlertmanagerConfig, PromQL rate5m recording rule confirmed in Phase 6
 
 ---
 
@@ -737,27 +738,28 @@ argocd app list
 | Multi-cloud Kustomize overlays (`prod/` + `gcp-prod/`) | ✅ Implemented | `kubectl kustomize` clean render |
 | Deployment runbooks with evidence capture (AWS + GCP) | ✅ Committed | `docs/runbooks/` · [Proof of Work](#proof-of-work--deployment-evidence) |
 
-### 🎯 Next — PCA (Prometheus Certified Associate)
+### 📊 Observability Evidence — PCA-Aligned (No Exam Planned)
 
-> Full-stack Observability & CRDs validated in Phase 6 — targeting PCA certification
+> Full-stack observability implemented and validated in Phase 6. PCA topics are covered by this platform but the exam is not being pursued — effort redirected to CKS.
 
 | Component | Status |
 |---|---|
 | ServiceMonitor CRD autodiscovery | ✅ Implemented (`kubernetes/observability/servicemonitor.yaml`) |
 | PrometheusRule (recording rules + alerts) | ✅ Implemented (`kubernetes/observability/prometheusrule.yaml`) |
 | AlertmanagerConfig (routing + receivers) | ✅ Implemented (`kubernetes/observability/alertmanagerconfig.yaml`) |
-| PromQL validation (rate5m recording rule) | ✅ Validated in Phase 6 |
+| PromQL validation (rate5m recording rule) | ✅ Validated — [E-04 screenshot](assets/Prometheus-Rate5m.png) |
 
-### 🔒 Planned — CKS (Certified Kubernetes Security Specialist)
+### 🎯 Next — CKS (Certified Kubernetes Security Specialist)
 
-> Runtime hardening, Kyverno admission, Bottlerocket/COS immutability
+> Currently studying — runtime hardening, Kyverno admission control, Bottlerocket/COS immutability, and supply chain security. Pillar 6 of this platform will be fully implemented and validated upon certification.
 
-| Focus Area | Mechanism |
-|---|---|
-| Runtime security | Falco / GuardDuty EKS Runtime Monitoring |
-| Admission control | Kyverno `ClusterPolicy` (Enforce mode) — Cosign keyless |
-| Network microsegmentation | Calico NetworkPolicy (GKE) + EKS Network Policy |
-| Secrets management | External Secrets Operator + AWS Secrets Manager / GCP Secret Manager |
+| Focus Area | Mechanism | Status |
+|---|---|---|
+| Admission control | Kyverno `ClusterPolicy` (Enforce mode) — Cosign keyless | 🔧 Code exists, live validation pending |
+| Runtime security | Falco / GuardDuty EKS Runtime Monitoring | 🎯 CKS target |
+| Network microsegmentation | EKS Network Policy + Calico (GKE) | 🎯 CKS target |
+| Secrets management | External Secrets Operator + AWS Secrets Manager | 🎯 CKS target |
+| Supply chain hardening | Trivy + Checkov gates in CI (implemented) | ✅ Implemented |
 
 ---
 
@@ -774,7 +776,7 @@ git commit -m "feat(gcp): add GKE hardened infrastructure — multi-cloud parity
 - docs/runbooks/gke-cloud-deployment.md: full ASCII checklist, 5 evidence pts
 - README: updated to reflect multi-cloud platform status"
 git tag -a v2.0.0-multi-cloud -m "Multi-cloud: AWS EKS + GCP GKE hardened parity complete"
-git push origin feat/pca-alertmanager-config --tags
+git push origin main --tags
 ```
 
 ---
