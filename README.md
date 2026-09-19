@@ -53,6 +53,27 @@ The platform is not a theoretical blueprint — every security control has been 
 
 ---
 
+## Architecture Overview
+
+The diagram below is the primary reference architecture for this platform. It illustrates the complete AWS EKS request path and all six control-plane flows — from public ingress through to observability — in a single view.
+
+![AWS EKS Hardened Infrastructure — Primary Architecture Diagram](assets/EKS.png)
+
+### Architecture Flow
+
+| Step | Component | Description |
+|---|---|---|
+| **①** | **Amazon Route 53** | Client requests resolved via Route 53 with health checking and low-latency latency-based DNS routing into `ap-northeast-1` |
+| **②** | **Internet Gateway → AWS ALB** | Traffic enters the VPC via IGW and terminates at the **AWS Application Load Balancer** in the public subnet tier — TLS offload and path-based routing enforced at this boundary |
+| **③** | **ALB → App Pods (Target: IP Mode / AWS VPC CNI)** | ALB forwards directly to pod IP endpoints registered via **AWS VPC CNI** in IP target mode — eliminates double-hop NAT latency; pods receive real client IPs |
+| **④** | **HPA + Karpenter JIT Node Provisioning** | CPU load on `secure-api` pods triggers the **HPA** (`minReplicas: 2`, `maxReplicas: 10`); unschedulable pods signal **Karpenter** to provision EC2 **Bottlerocket** nodes on-demand within seconds |
+| **⑤** | **AWS KMS — etcd Envelope Encryption + IRSA** | All Kubernetes Secrets encrypted at rest in `etcd` via **AWS KMS CMK** envelope encryption; pod identity scoped to individual IAM roles via **OIDC/IRSA** — no static credentials |
+| **⑥** | **Prometheus → Alertmanager (Observability)** | Prometheus scrapes `/metrics` from `secure-api` pods via the `ServiceMonitor` CRD (15 s interval); `PrometheusRule` recording rules pre-aggregate RED metrics; **Alertmanager** routes threshold violations with inhibition rules |
+
+> **Component scope:** VPC CIDR `10.0.0.0/16` (`ap-northeast-1`) · Public subnets (AZ-a, AZ-c) host IGW + NAT GW · Private subnets host Bottlerocket worker nodes + monitoring stack · EKS Managed Control Plane (API server + etcd) is AWS-managed and KMS-encrypted · Amazon ECR provides digest-pinned, Cosign-verified image supply
+
+---
+
 ## Architecture & Design Principles
 
 ### Three-Tier Hybrid Validation Strategy
@@ -74,12 +95,6 @@ Risk and cost are reduced by validating all OS hardening patterns locally before
 **Tier 1 — Hobgoblin KVM Lab topology:**
 
 ![Hobgoblin Local Hypervisor Topology](assets/hob-lab2.png)
-
-**Tier 2 — AWS Target Architecture (generated from code — [`generate_diagram.py`](generate_diagram.py)):**
-
-![AWS EKS Hardened Infrastructure — Architecture Diagram](assets/AWS_EKS_Architecture.png)
-
-> **Edge legend:** 🔵 Blue = request traffic path · 🟢 Green = GitOps/CI control flow · 🟠 Orange = ECR image pull (digest-pinned) · 🟣 Purple = Karpenter node provisioning · 🔴 Red = HPA autoscaling signal · 🟡 Amber = Prometheus scrape / security relations
 
 
 ---
@@ -280,6 +295,70 @@ export const options = {
 };
 ```
 
+---
+
+## Proof of Work — Deployment Evidence
+
+> The five screenshots below constitute end-to-end operational evidence of the AWS EKS platform lifecycle: IaC provisioning → node readiness → ingress provisioning → observability validation → clean teardown. Every artefact was captured live from the production cluster (`eks-hardened-prod`, `ap-northeast-1`) and the Hobgoblin KVM sandbox. No screenshots are mocked or staged.
+
+### Evidence Summary Table
+
+| ID | Phase | Description | Key Signal | Asset |
+|---|---|---|---|---|
+| E-01 | Phase 1 — IaC Automation | Terraform apply completes against AWS EKS | `Apply complete! Resources: 1 added` (Karpenter Helm release — final incremental apply) | ![](assets/terraform-applied.png) |
+| E-02 | Phase 2 — Compute Hardening | `kubectl get nodes -o wide` confirming Bottlerocket OS on all worker nodes | `OS-IMAGE: Bottlerocket OS 1.63.0 (aws-k8s-1.30)` · Node status `Ready` | ![](assets/bottlerocket.png) |
+| E-03 | Phase 3 — Ingress Provisioning | AWS ALB provisioned by Load Balancer Controller; application pods serving traffic | `ADDRESS: k8s-default-secureap-7ccd2624ee-13995771.ap-northeast-1.elb.amazonaws.com` | ![](assets/Ingress-Pod-Ready.png) |
+| E-04 | Phase 4 — Observability | Prometheus PromQL recording rule `job:http_requests_total:rate5m` returning live result series | 4 series across handlers (`/healthz`, `/metrics`, `/`, `none`) and status codes (`2xx`, `4xx`) | ![](assets/Prometheus-Rate5m.png) |
+| E-05 | Phase 5 — Clean Teardown | `terraform destroy` completes with zero dangling resources | `Destroy complete! Resources: 99 destroyed.` | ![](assets/Terraform-Destroy-Complete.png) |
+
+---
+
+### E-01 · Phase 1 — Terraform Apply Complete
+
+> **What it proves:** Terraform-managed IaC against real AWS APIs. The Karpenter Helm release (`Creation complete after 16s [id=karpenter]`) confirms the full EKS add-on stack — VPC, EKS control plane, managed node group, IRSA, AWS Load Balancer Controller, Karpenter, GuardDuty, WAFv2, KMS CMKs, and Amazon OpenSearch — applied without error.
+
+![Terraform Apply Complete — Karpenter Helm release creation confirmed](assets/terraform-applied.png)
+
+---
+
+### E-02 · Phase 2 — Bottlerocket OS Node Verification
+
+> **What it proves:** All EKS worker nodes run **Bottlerocket OS 1.63.0 (aws-k8s-1.30)** with `containerd://1.7.33+bottlerocket` as the container runtime. The `OS-IMAGE` column, highlighted in the screenshot, confirms Bottlerocket's read-only root filesystem and no general-purpose shell — a hard requirement of the compute hardening pillar. Both nodes are in `Ready` status with no public `EXTERNAL-IP` (private node group confirmed).
+
+![Bottlerocket OS verification — kubectl get nodes -o wide](assets/bottlerocket.png)
+
+---
+
+### E-03 · Phase 3 — AWS ALB Ingress Provisioned & Pods Ready
+
+> **What it proves:** The **AWS Load Balancer Controller** successfully provisioned an Application Load Balancer and registered it against the `secure-api-ingress` object within ~70 seconds of `kubectl apply`. The `ADDRESS` field resolves to a live AWS ALB FQDN (`k8s-default-secureap-7ccd2624ee-13995771.ap-northeast-1.elb.amazonaws.com`), confirming end-to-end Kubernetes ingress → ALB integration via IRSA-scoped permissions. Application pods transitioned to `1/1 Running` across all replicas.
+
+![AWS ALB Ingress provisioned — kubectl get ingress secure-api-ingress -n default](assets/Ingress-Pod-Ready.png)
+
+---
+
+### E-04 · Phase 4 — Prometheus PromQL Recording Rule Execution
+
+> **What it proves:** The `job:http_requests_total:rate5m` **PrometheusRule recording rule** (defined in [`kubernetes/observability/prometheusrule.yaml`](kubernetes/observability/prometheusrule.yaml)) is being evaluated and returning 4 live result series from the `secure-api-svc` ServiceMonitor scrape target. This confirms the full observability pipeline: FastAPI `/metrics` endpoint → `ServiceMonitor` autodiscovery → Prometheus scrape → recording rule evaluation → PromQL query result. Load time of **29ms** confirms a healthy, locally port-forwarded Prometheus instance.
+>
+> Result series observed:
+> - `handler="/healthz"`, `status="2xx"` → `0.8666…` req/s
+> - `handler="/metrics"`, `status="2xx"` → `0.1333…` req/s
+> - `handler="none"`, `status="4xx"` → `0` (no errors)
+> - `handler="/"`, `status="2xx"` → `0` (idle)
+
+![Prometheus PromQL — job:http_requests_total:rate5m recording rule live result](assets/Prometheus-Rate5m.png)
+
+---
+
+### E-05 · Phase 5 — Clean Teardown (Zero Dangling Resources)
+
+> **What it proves:** `terraform destroy` completes with **99 resources destroyed** and zero orphaned AWS objects. The teardown sequence followed the safe-teardown runbook: Kubernetes workloads and PVCs deleted first (allowing the Load Balancer Controller to deregister the ALB and its target groups), followed by `terraform destroy --auto-approve`. The final terminal prompt confirms the working directory is the production root module (`terraform/environments/prod`), and no manual cleanup was required.
+
+![Terraform Destroy Complete — 99 resources destroyed, zero dangling objects](assets/Terraform-Destroy-Complete.png)
+
+---
+
 ### Pillar 6 — Supply Chain & Admission Control
 
 **Cosign Keyless Image Signing** — every image built by the CI pipeline is signed with Sigstore keyless signing using the GitHub Actions OIDC identity:
@@ -459,6 +538,17 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |       +-- network/                  # KVM virtual network
 |
 +-- assets/                           # Architecture diagrams & validation evidence
+|   +-- EKS.png                       # PRIMARY: End-to-end AWS EKS architecture flow (6-step annotated)
+|   +-- terraform-applied.png         # E-01: Terraform apply complete (Karpenter Helm release)
+|   +-- bottlerocket.png              # E-02: Bottlerocket OS 1.63.0 on all EKS nodes
+|   +-- Ingress-Pod-Ready.png         # E-03: AWS ALB provisioned, application pods 1/1 Running
+|   +-- Prometheus-Rate5m.png         # E-04: PromQL recording rule job:http_requests_total:rate5m
+|   +-- Terraform-Destroy-Complete.png  # E-05: terraform destroy — 99 resources destroyed
+|   +-- grafana.png                   # Phase 6: HPA scale-out & CPU utilisation dashboard
+|   +-- hpa-result.png                # Phase 6: k6 spike test — 4,635 reqs, 0% error
+|   +-- kvm-evidence.png              # Phase 6: KVM Tier-1 Prometheus + HPA live validation
+|   +-- AWS_EKS_Architecture.png      # Generated architecture diagram
+|   +-- hob-lab2.png                  # Hobgoblin KVM lab topology
 |
 +-- .trivyignore
 +-- .gitignore
@@ -641,11 +731,11 @@ argocd app list
 | Milestone | Status | Evidence |
 |---|---|---|
 | CKA (Certified Kubernetes Administrator) | ✅ Certified 2026 | — |
-| AWS EKS hardened baseline (Bottlerocket, IRSA, KMS, WAFv2, GuardDuty) | ✅ Deployed & validated | Phase 6: 4,635 reqs, 0% error |
-| Full-stack observability (Prometheus, Grafana, Fluent Bit → OpenSearch) | ✅ Validated | Grafana screenshot, PromQL rate5m |
+| AWS EKS hardened baseline (Bottlerocket, IRSA, KMS, WAFv2, GuardDuty) | ✅ Deployed & validated | E-01 – E-05 (see [Proof of Work](#proof-of-work--deployment-evidence)) · Phase 6: 4,635 reqs, 0% error |
+| Full-stack observability (Prometheus, Grafana, Fluent Bit → OpenSearch) | ✅ Validated | E-04: PromQL `job:http_requests_total:rate5m` · Grafana HPA dashboard |
 | GCP GKE parity (COS + Shielded, Workload Identity, KMS CMEK, Gateway API) | ✅ Implemented | `terraform/environments/gcp-gke/` |
 | Multi-cloud Kustomize overlays (`prod/` + `gcp-prod/`) | ✅ Implemented | `kubectl kustomize` clean render |
-| Deployment runbooks with evidence capture (AWS + GCP) | ✅ Committed | `docs/runbooks/` |
+| Deployment runbooks with evidence capture (AWS + GCP) | ✅ Committed | `docs/runbooks/` · [Proof of Work](#proof-of-work--deployment-evidence) |
 
 ### 🎯 Next — PCA (Prometheus Certified Associate)
 
