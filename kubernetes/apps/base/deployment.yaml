@@ -28,8 +28,11 @@ spec:
             - -c
           args:
             - |
-              mkdir -p /app && cd /app
-              pip install --no-cache-dir fastapi uvicorn prometheus-fastapi-instrumentator
+              export HOME=/tmp
+              export PYTHONPATH=/app
+              export PATH=/app/bin:$PATH
+              cd /app
+              pip install --no-cache-dir --target /app fastapi uvicorn prometheus-fastapi-instrumentator
               cat << 'EOC' > /app/main.py
               import time, math
               from fastapi import FastAPI
@@ -53,7 +56,7 @@ spec:
                       _ = math.sqrt(123456.789) * math.sin(9876.543)
                   return {"status": "burned", "duration": duration}
               EOC
-              uvicorn main:app --host 0.0.0.0 --port 8000  
+              python3 -m uvicorn main:app --host 0.0.0.0 --port 8000  
           env:
             - name: APP_VERSION
               value: "v1.0.0"
@@ -70,6 +73,13 @@ spec:
             limits:
               cpu: "200m"
               memory: "256Mi"
+          startupProbe:
+              httpGet:
+                path: /healthz
+                port: 8000
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /healthz
@@ -86,3 +96,14 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 1
             failureThreshold: 2
+          volumeMounts:
+            - mountPath: /app
+              name: app-volume
+            - mountPath: /tmp
+              name: tmp-volume
+      volumes:
+        - name: tmp-volume
+          emptyDir: {}
+        - name: app-volume
+          emptyDir: {}
+          

@@ -10,18 +10,18 @@ Purpose      : Cloud Deployment Guide + Portfolio Evidence Collection
   Phase 1: Pre-Flight & Provisioning (Terraform)
 ================================================================================
 
-[ ] 1.1  Verify AWS CLI Credentials and Context
+[ x] 1.1  Verify AWS CLI Credentials and Context
          $ aws sts get-caller-identity
 
 
-[ ] 1.2  Run Terraform to Provision Infrastructure
+[ x] 1.2  Run Terraform to Provision Infrastructure
          $ cd terraform
          $ terraform init
          $ terraform plan -out=tfplan
          $ terraform apply tfplan
 
 
-[ ] SCREENSHOT #1 - Terraform Apply Complete
+[ x] SCREENSHOT #1 - Terraform Apply Complete
          Capture terminal showing:
            Apply complete! Resources: XX added, 0 changed, 0 destroyed.
          And Outputs table showing:
@@ -40,7 +40,7 @@ Purpose      : Cloud Deployment Guide + Portfolio Evidence Collection
          $ kubectl get nodes -o wide
 
 
-[ ] SCREENSHOT #2 - Bottlerocket OS Verification
+[ x] SCREENSHOT #2 - Bottlerocket OS Verification
          Capture output of `kubectl get nodes -o wide`
          Highlight OS-IMAGE column showing "Bottlerocket OS"
          All nodes must show status "Ready"
@@ -50,22 +50,22 @@ Purpose      : Cloud Deployment Guide + Portfolio Evidence Collection
   Phase 3: Workload & AWS Load Balancer Controller (Prod Overlay)
 ================================================================================
 
-[ ] 3.0  Verify AWS Load Balancer Controller is Running
+[ x] 3.0  Verify AWS Load Balancer Controller is Running
          $ kubectl get deployment -n kube-system aws-load-balancer-controller
 
 
-[ ] 3.1  Deploy Production Overlay via Kustomize
+[ x] 3.1  Deploy Production Overlay via Kustomize
          $ kubectl apply -k kubernetes/apps/overlays/prod/
 
 
-[ ] 3.2  Verify Pods, Services, and AWS ALB Ingress
+[ x] 3.2  Verify Pods, Services, and AWS ALB Ingress
          $ kubectl get pods,svc,ingress -n default -o wide
 
          NOTE: Wait 2-3 minutes for AWS ALB to provision
                ADDRESS should show k8s-default-...elb.amazonaws.com
 
 
-[ ] SCREENSHOT #3 - Production Ingress & Pods
+[ x] SCREENSHOT #3 - Production Ingress & Pods
          Capture terminal showing Pod "secure-api" in 1/1 Running state
          All replicas running, and Ingress showing AWS ALB URL in ADDRESS field
 
@@ -74,18 +74,18 @@ Purpose      : Cloud Deployment Guide + Portfolio Evidence Collection
   Phase 4: Observability, Metrics & Alert Pipeline
 ================================================================================
 
-[ ] 4.0  Deploy Observability Stack & PrometheusRules
-         $ kubectl apply -k kubernetes/observability/
+[x ] 4.0  Deploy Observability Stack & PrometheusRules
+         $ kubectl apply -f kubernetes/observability/
          $ kubectl get pods -n monitoring
 
 
-[ ] 4.1  Send Test Traffic via Public ALB URL
+[ x] 4.1  Send Test Traffic via Public ALB URL
          $ ALB_URL=$(kubectl get ingress secure-api-ingress -n default \
              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
          $ curl -I http://$ALB_URL/healthz
 
 
-[ ] 4.2  Verify Prometheus Scrape Target (up == 1)
+[ x] 4.2  Verify Prometheus Scrape Target (up == 1)
          $ kubectl -n monitoring port-forward \
              svc/$(kubectl get svc -n monitoring \
                -l app=kube-prometheus-stack-prometheus \
@@ -95,13 +95,13 @@ Purpose      : Cloud Deployment Guide + Portfolio Evidence Collection
              http://localhost:9090/api/v1/query | jq .data.result
 
 
-[ ] 4.3  Verify Recording Rules via Prometheus
+[ x] 4.3  Verify Recording Rules via Prometheus
          $ curl -sG \
              --data-urlencode 'query=job:http_requests_total:rate5m' \
              http://localhost:9090/api/v1/query | jq .data.result
 
 
-[ ] SCREENSHOT #4 - End-to-End Observability
+[x ] SCREENSHOT #4 - End-to-End Observability
          Capture Prometheus Web UI or Terminal jq output showing:
            query result: job:http_requests_total:rate5m
            Target on cloud with status UP

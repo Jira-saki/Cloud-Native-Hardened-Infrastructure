@@ -4,7 +4,7 @@ metadata:
   name: secure-api-rules
   namespace: monitoring
   labels:
-    release: monitoring
+    release: kube-prometheus-stack
     app.kubernetes.io/name: secure-api
     role: alert-rules
 spec:

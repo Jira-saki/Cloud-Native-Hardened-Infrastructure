@@ -2,10 +2,13 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: secure-api-monitor
-  namespace: default
+  namespace: monitoring
   labels:
-    release: monitoring-stack
+    release: kube-prometheus-stack
 spec:
+  namespaceSelector:
+    matchNames:
+      - default
   selector:
     matchLabels:
       app: secure-api
