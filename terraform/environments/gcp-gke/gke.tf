@@ -191,9 +191,9 @@ resource "google_container_node_pool" "primary" {
 
     # ── Node Labels ───────────────────────────────────────────────────────
     labels = {
-      env         = "prod"
-      managed-by  = "terraform"
-      node-pool   = "${var.cluster_name}-node-pool"
+      env        = "prod"
+      managed-by = "terraform"
+      node-pool  = "${var.cluster_name}-node-pool"
     }
 
     # ── Node Taints (none for general workloads) ──────────────────────────
