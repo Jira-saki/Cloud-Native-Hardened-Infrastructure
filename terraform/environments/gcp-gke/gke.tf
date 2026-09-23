@@ -8,6 +8,14 @@ resource "google_container_cluster" "primary" {
   name     = var.cluster_name
   location = var.region
 
+  # ── Cluster Labels (CKV_GCP_21) ──────────────────────────────────────────
+  #checkov:skip=CKV_GCP_65: No Google Workspace domain configured; authenticator_groups_config is not applicable for this environment.
+  #checkov:skip=CKV_GCP_69: Cluster-level check is a false-positive; remove_default_node_pool=true means no default pool runs. The managed node pool (google_container_node_pool.primary) sets mode="GKE_METADATA".
+  resource_labels = {
+    environment = "prod"
+    managed-by  = "terraform"
+  }
+
   # ── Network ───────────────────────────────────────────────────────────────
   network    = google_compute_network.vpc.name
   subnetwork = google_compute_subnetwork.gke_subnet.name
@@ -63,11 +71,21 @@ resource "google_container_cluster" "primary" {
     key_name = google_kms_crypto_key.gke_etcd.id
   }
 
-  # ── Hardening: Security Posture & Binary Authorization ────────────────────
+  # ── Hardening: Binary Authorization (CKV_GCP_66) ────────────────────────
+  # Enforces project-level Binary Authorization policy — only signed images run.
+  binary_authorization {
+    evaluation_mode = "PROJECT_SINGLETON_POLICY_ENFORCE"
+  }
+
+  # ── Hardening: Security Posture & Vulnerability Scanning ──────────────────
   security_posture_config {
     mode               = "BASIC"
     vulnerability_mode = "VULNERABILITY_BASIC"
   }
+
+  # ── Hardening: Intranode Visibility (CKV_GCP_61) ────────────────────────
+  # Enables VPC flow logs between pods on the same node for full observability.
+  enable_intranode_visibility = true
 
   # ── Hardening: Shielded Nodes (cluster-wide default) ──────────────────────
   # GCP parity to: Bottlerocket OS hardened kernel on EKS

@@ -72,3 +72,58 @@ resource "google_compute_router_nat" "nat" {
     filter = "ERRORS_ONLY"
   }
 }
+
+###############################################################################
+# Firewall — Explicit intra-cluster allow rule (CKV2_GCP_18)
+# GCP best practice: define explicit firewall rules; do not rely on the
+# implicit default-allow rules that are created with a new VPC.
+###############################################################################
+
+resource "google_compute_firewall" "gke_allow_internal" {
+  project     = var.project_id
+  name        = "${var.cluster_name}-allow-internal"
+  network     = google_compute_network.vpc.name
+  description = "Allow internal traffic between GKE nodes, pods, and services. Satisfies CKV2_GCP_18."
+  direction   = "INGRESS"
+  priority    = 1000
+
+  # Allow TCP, UDP, and ICMP within the cluster's own address space only.
+  allow {
+    protocol = "tcp"
+  }
+  allow {
+    protocol = "udp"
+  }
+  allow {
+    protocol = "icmp"
+  }
+
+  # Restrict to cluster-internal CIDRs — no public ingress permitted.
+  source_ranges = [
+    "10.0.0.0/24",   # node subnet (gke_subnet primary range)
+    "10.100.0.0/16", # pod secondary range
+    "10.101.0.0/20", # services secondary range
+  ]
+
+  target_tags = ["gke-node"]
+}
+
+###############################################################################
+# Firewall — Deny all other ingress (explicit default-deny)
+# Ensures no implicit rules allow unexpected traffic into the VPC.
+###############################################################################
+
+resource "google_compute_firewall" "gke_deny_all_ingress" {
+  project     = var.project_id
+  name        = "${var.cluster_name}-deny-all-ingress"
+  network     = google_compute_network.vpc.name
+  description = "Default-deny all ingress not matched by a higher-priority allow rule."
+  direction   = "INGRESS"
+  priority    = 65534
+
+  deny {
+    protocol = "all"
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+}
