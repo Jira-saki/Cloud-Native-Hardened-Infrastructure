@@ -5,18 +5,18 @@
 ![CKA](https://img.shields.io/badge/Kubernetes-CKA%20Certified-326CE5?logo=kubernetes&logoColor=white)
 ![ArgoCD](https://img.shields.io/badge/GitOps-ArgoCD-EF7B4D?logo=argo)
 ![Karpenter](https://img.shields.io/badge/Autoscaling-Karpenter-FF6600)
-![Kyverno](https://img.shields.io/badge/Policy-Kyverno-3D98D3)
+![Trivy](https://img.shields.io/badge/Security-Trivy-00A4C6?logo=trivy)
 ![Multi-Cloud](https://img.shields.io/badge/Multi--Cloud-AWS%20%7C%20GCP-blueviolet)
 
 # Multi-Cloud Hardened Infrastructure — AWS EKS & GCP GKE
 
+[🇺🇸 English](README.md) | [🇯🇵 日本語](README.ja.md)
+
 🎯 Professional Roadmap & Certification Alignment
 Completed Milestones:
 - ✅ CKA (Certified Kubernetes Administrator) — Certified (2026)
-Active Study:
-- 🎯 CKS (Certified Kubernetes Security Specialist) — Runtime hardening, Kyverno admission control & Bottlerocket/COS immutability (in progress)
-Observability Evidence (PCA-aligned, no exam planned):
-- 📊 Full-stack Observability validated — ServiceMonitor, PrometheusRule, AlertmanagerConfig, PromQL rate5m recording rule confirmed in Phase 6
+Target Certification:
+- 🎯 CKS (Certified Kubernetes Security Specialist) — Target Exam: November 2026 (Runtime hardening, Network Policies & Bottlerocket/COS immutability)
 
 ---
 
@@ -47,9 +47,9 @@ The platform is not a theoretical blueprint — every security control has been 
 | No public node access | Bottlerocket — no shell, read-only root FS | COS_CONTAINERD + Shielded Nodes — Secure Boot, vTPM |
 | Least-privilege pod identity | IRSA (OIDC) | Workload Identity (`iam.gke.io/gcp-service-account`) |
 | Encrypted secrets | AWS KMS CMKs, `enable_key_rotation = true` | Cloud KMS CMEK, 90-day rotation |
-| Supply chain integrity | Cosign keyless + Kyverno `ClusterPolicy` | Same Kyverno policy (cloud-agnostic) |
+| Container security & image gate | Aqua Trivy image scan in CI pipeline | Same pipeline (provider-agnostic) |
 | Runtime threat detection | GuardDuty EKS Runtime Monitoring | GKE Security Posture + Binary Authorization (hook) |
-| IaC hardening gate | Checkov + Trivy in GitHub Actions | Same pipeline (provider-agnostic) |
+| IaC & repo security gate | Checkov + Trivy FS scan in GitHub Actions | Same pipeline (provider-agnostic) |
 | Centralized audit logging | Fluent Bit → Amazon OpenSearch SIEM | GKE Cloud Logging (system + workloads) |
 
 ---
@@ -71,7 +71,7 @@ The diagram below is the primary reference architecture for this platform. It il
 | **⑤** | **AWS KMS — etcd Envelope Encryption + IRSA** | All Kubernetes Secrets encrypted at rest in `etcd` via **AWS KMS CMK** envelope encryption; pod identity scoped to individual IAM roles via **OIDC/IRSA** — no static credentials |
 | **⑥** | **Prometheus → Alertmanager (Observability)** | Prometheus scrapes `/metrics` from `secure-api` pods via the `ServiceMonitor` CRD (15 s interval); `PrometheusRule` recording rules pre-aggregate RED metrics; **Alertmanager** routes threshold violations with inhibition rules |
 
-> **Component scope:** VPC CIDR `10.0.0.0/16` (`ap-northeast-1`) · Public subnets (AZ-a, AZ-c) host IGW + NAT GW · Private subnets host Bottlerocket worker nodes + monitoring stack · EKS Managed Control Plane (API server + etcd) is AWS-managed and KMS-encrypted · Amazon ECR provides digest-pinned, Cosign-verified image supply
+> **Component scope:** VPC CIDR `10.0.0.0/16` (`ap-northeast-1`) · Public subnets (AZ-a, AZ-c) host IGW + NAT GW · Private subnets host Bottlerocket worker nodes + monitoring stack · EKS Managed Control Plane (API server + etcd) is AWS-managed and KMS-encrypted · Amazon ECR provides digest-pinned, Trivy-scanned image supply
 
 ---
 
@@ -181,18 +181,27 @@ metadata:
 - **AWS GuardDuty** with `EKS_RUNTIME_MONITORING` and `EKS_ADDON_MANAGEMENT` features enabled for real-time behavioral threat detection
 - **AWS SSM** (`AmazonSSMManagedInstanceCore`) attached to Karpenter node IAM role — replacing SSH entirely for any operational access
 
-### Pillar 4 — GitOps & Continuous Delivery
+### Pillar 4 — GitOps & DevSecOps CI/CD Pipeline
 
-ArgoCD manages declarative synchronization from `origin/main` to both the KVM sandbox and AWS EKS clusters. Every `git push` to `main` triggers automated reconciliation with `prune: true` and `selfHeal: true`.
+Continuous Delivery is managed via declarative GitOps with ArgoCD, integrated seamlessly with a Shift-Left security pipeline in GitHub Actions. Every `git push` to `main` triggers automated vulnerability scanning, IaC policy enforcement, and drift reconciliation with `prune: true` and `selfHeal: true`.
 
 ```
 [ Developer: git push origin main ]
            |
            v
-[ GitHub Actions: Trivy FS scan -> CI gate ]
+[ GitHub Actions: Trivy FS Scan + Checkov IaC Scan ]  <- Shift-Left Security Gates
            |
            v
-[ ArgoCD: detects drift on main branch ]
+[ Docker Build (python:3.11-slim, non-root UID 10001) ]
+           |
+           v
+[ Aqua Trivy Container Image Scan (CRITICAL/HIGH fail) ]
+           |
+           v
+[ ECR Push + Kustomize Tag Bump -> Git Commit ]
+           |
+           v
+[ ArgoCD: Drift detection & automated sync ]
            |
     +------+------+
     v             v
@@ -207,6 +216,16 @@ ArgoCD manages declarative synchronization from `origin/main` to both the KVM sa
 | `secure-api-local` | KVM / local | `kubernetes/apps/overlays/local` | Automated, selfHeal |
 | `secure-api-prod` | AWS EKS | `kubernetes/apps/overlays/prod` | Automated, prune, selfHeal |
 | `kube-prometheus-stack` | AWS EKS | `prometheus-community` Helm chart v61.3.1 | Automated, ServerSideApply |
+
+**Automated DevSecOps Security Gates (GitHub Actions):**
+
+| Gate | Tool | Trigger | Policy & Verification |
+|---|---|---|---|
+| Terraform formatting | `terraform fmt -check` | Push / PR to `main` | Enforces canonical style |
+| Terraform validation | `terraform validate` | Push / PR to `main` | Validates configuration syntax |
+| IaC misconfiguration | **Checkov** | Push / PR to `main` | Hardening checks across Terraform modules (`checkov-scan.yaml`) |
+| Filesystem vulnerability | **Aqua Trivy** (`fs` mode) | Every push to `app/` | Blocks build on `CRITICAL,HIGH` CVEs (`ci-devsecops.yml`) |
+| Container image scan | **Aqua Trivy** (`image` mode) | Pre-push gate in CI | Validates final container layer prior to ECR registry push |
 
 The monitoring stack (`kube-prometheus-stack`) is deployed via the ArgoCD Helm source with node selectors pinning Prometheus, Grafana, Alertmanager, and kube-state-metrics to dedicated `observability`-labeled nodes.
 
@@ -360,69 +379,6 @@ export const options = {
 
 ---
 
-### Pillar 6 — Supply Chain & Admission Control
-
-**Cosign Keyless Image Signing** — every image built by the CI pipeline is signed with Sigstore keyless signing using the GitHub Actions OIDC identity:
-
-```yaml
-# kubernetes/security/kyverno-cosign.yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
-metadata:
-  name: check-image-signature
-  annotations:
-    policies.kyverno.io/severity: critical
-spec:
-  validationFailureAction: Enforce   # BLOCK, not audit
-  rules:
-    - name: verify-signature
-      verifyImages:
-        - imageReferences:
-            - "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/*"
-          attestors:
-            - entries:
-                - keyless:
-                    issuer: "https://token.actions.githubusercontent.com"
-                    subject: "https://github.com/Jira-saki/Cloud-Native-Hardened-Infrastructure/.github/workflows/ci-devsecops.yml@refs/heads/main"
-```
-
-**Supply chain pipeline:**
-
-```
-[ git push app/ ]
-      |
-      v
-[ Trivy FS scan — CRITICAL/HIGH exit-code 1 ]
-      |
-      v
-[ Docker build — python:3.11-slim multi-stage ]
-  (non-root UID 10001, no build tools in final image)
-      |
-      v
-[ Trivy image scan ]
-      |
-      v
-[ cosign sign --yes  (keyless, GitHub Actions OIDC) ]
-      |
-      v
-[ ECR push + Kustomize tag bump -> git commit -> ArgoCD sync ]
-      |
-      v
-[ Kyverno ClusterPolicy BLOCKS any unsigned image at admission ]
-```
-
-**IaC Security Gates (GitHub Actions):**
-
-| Gate | Tool | Trigger |
-|---|---|---|
-| Terraform format check | `terraform fmt -check` | Push / PR to `main` |
-| Terraform validation | `terraform validate` | Push / PR to `main` |
-| IaC misconfiguration scan | **Checkov** | Separate `checkov-scan.yaml` workflow |
-| Filesystem vuln scan | **Aqua Trivy** (`fs` mode) | `ci-devsecops.yml` — every push to `app/` |
-| Image vuln scan | **Aqua Trivy** (`image` mode) | Pre-push gate in `deploy.yml` |
-
----
-
 ## Security Control Matrix
 
 | Domain | Control | Threat Addressed | Verification |
@@ -431,7 +387,7 @@ spec:
 | Compute Integrity | Bottlerocket OS (read-only root, no shell), seccomp `RuntimeDefault` | Host compromise, container escape | CIS benchmarks / node spec / admission policy |
 | Identity & Access | IRSA per-workload (OIDC), GuardDuty EKS Runtime Monitoring | Credential leakage, lateral movement | IAM policy audit / CloudTrail |
 | Data Protection | AWS KMS CMKs (auto-rotation), OpenSearch encrypt-at-rest, TLS 1.2+ | Unencrypted secrets, data exfiltration | KMS policy / `aws kms describe-key` |
-| Supply Chain | Cosign keyless signing, Kyverno `Enforce` admission, Trivy, Checkov | Tampered images, vulnerable dependencies, IaC drift | CI logs / `cosign verify` / Kyverno policy |
+| CI/CD & Pipeline Security | Aqua Trivy (FS + Image scan), Checkov IaC scanner, non-root multi-stage | Vulnerable dependencies, misconfigured IaC, container privilege escalation | GitHub Actions CI logs / Security tab |
 | Observability | Prometheus + Grafana, Fluent Bit -> OpenSearch SIEM, VPC Flow Logs | Blind spots, undetected runtime anomalies | Grafana dashboards / OpenSearch indices |
 | Availability | HPA (pod-level), Karpenter (node-level), PDB, RollingUpdate, preStop | Single-pod SPOF, over-provisioning cost | k6 spike test — 4,635 reqs, 0% error |
 | Logging | VPC Flow Logs (CloudWatch), Fluent Bit DaemonSet (OpenSearch) | Audit gap, forensic loss | CloudWatch log group / OpenSearch index |
@@ -445,7 +401,7 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |
 +-- .github/
 |   +-- workflows/
-|       +-- ci-devsecops.yml          # Trivy FS scan + Cosign + ECR push + GitOps tag bump
+|       +-- ci-devsecops.yml          # Trivy FS scan + Docker build + Trivy image scan + GitOps tag bump
 |       +-- checkov-scan.yaml         # Standalone Checkov IaC hardening scan
 |       +-- deploy.yml                # Image build, Trivy image scan, ECR deploy
 |
@@ -502,7 +458,7 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |   |   +-- karpenter-ec2nodeclass.yaml
 |   |
 |   +-- security/
-|   |   +-- kyverno-cosign.yaml       # ClusterPolicy: Enforce Cosign keyless sig on ECR images
+|   |   +-- kyverno-cosign.yaml       # Admission control policy template (reference)
 |   |
 |   +-- observability/
 |       +-- metrics-server.yaml
@@ -554,6 +510,7 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 +-- .trivyignore
 +-- .gitignore
 +-- README.md
++-- README.ja.md
 ```
 
 ---
@@ -586,18 +543,13 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
                      +-----------+-----------+
                                  |
                      +-----------v-----------+
-                     |  5. ECR Push +         |  AWS OIDC (no stored credentials)
-                     |     Cosign Sign        |  Keyless -- GitHub Actions identity
+                     |  5. ECR Push           |  AWS OIDC (no stored credentials)
+                     |  (via OIDC role)       |  Least-privilege registry auth
                      +-----------+-----------+
                                  |
                      +-----------v-----------+
                      |  6. GitOps Tag Bump    |  kustomize edit set image
                      |  (Kustomize + git push)|  ArgoCD detects -> auto-sync
-                     +-----------+-----------+
-                                 |
-                     +-----------v-----------+
-                     |  7. Kyverno Admission  |  Unsigned image -> BLOCK (Enforce)
-                     |  (at deploy time)      |  Signed image -> ALLOW
                      +-----------------------+
 ```
 
@@ -642,12 +594,6 @@ kubectl get pods,svc,ingress -n default -o wide
 # 5. Run k6 spike test
 ALB_DNS=$(kubectl get ingress secure-api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 k6 run --env BASE_URL=http://$ALB_DNS tests/spike-test.js
-
-# 6. Verify Cosign supply chain
-cosign verify \
-  --certificate-identity "https://github.com/Jira-saki/Cloud-Native-Hardened-Infrastructure/.github/workflows/ci-devsecops.yml@refs/heads/main" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  <ACCOUNT_ID>.dkr.ecr.ap-northeast-1.amazonaws.com/secure-api:<TAG>
 ```
 
 ### AWS EKS — Safe Teardown
@@ -751,15 +697,14 @@ argocd app list
 
 ### 🎯 Next — CKS (Certified Kubernetes Security Specialist)
 
-> Currently studying — runtime hardening, Kyverno admission control, Bottlerocket/COS immutability, and supply chain security. Pillar 6 of this platform will be fully implemented and validated upon certification.
+> Target Exam: November 2026 — Currently studying runtime hardening, container immutability, network microsegmentation, and cluster attack defense.
 
 | Focus Area | Mechanism | Status |
 |---|---|---|
-| Admission control | Kyverno `ClusterPolicy` (Enforce mode) — Cosign keyless | 🔧 Code exists, live validation pending |
 | Runtime security | Falco / GuardDuty EKS Runtime Monitoring | 🎯 CKS target |
 | Network microsegmentation | EKS Network Policy + Calico (GKE) | 🎯 CKS target |
 | Secrets management | External Secrets Operator + AWS Secrets Manager | 🎯 CKS target |
-| Supply chain hardening | Trivy + Checkov gates in CI (implemented) | ✅ Implemented |
+| CI/CD & Pipeline security | Aqua Trivy + Checkov gates in CI | ✅ Implemented |
 
 ---
 
@@ -767,7 +712,7 @@ argocd app list
 
 ```bash
 git add terraform/environments/gcp-gke/ kubernetes/apps/overlays/gcp-prod/ \
-        docs/runbooks/gke-cloud-deployment.md README.md
+        docs/runbooks/gke-cloud-deployment.md README.md README.ja.md
 git commit -m "feat(gcp): add GKE hardened infrastructure — multi-cloud parity complete
 
 - terraform/environments/gcp-gke/: VPC-native, Cloud KMS CMEK, private GKE
