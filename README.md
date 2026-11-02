@@ -1,14 +1,12 @@
 ![Build Status](https://github.com/Jira-saki/Cloud-Native-Hardened-Infrastructure/workflows/DevSecOps%20Infrastructure%20Pipeline/badge.svg)
 ![Terraform](https://img.shields.io/badge/Terraform-1.x-7B42BC?logo=terraform)
 ![AWS EKS](https://img.shields.io/badge/AWS-EKS-FF9900?logo=amazonaws)
-![GCP GKE](https://img.shields.io/badge/GCP-GKE-4285F4?logo=googlecloud&logoColor=white)
 ![CKA](https://img.shields.io/badge/Kubernetes-CKA%20Certified-326CE5?logo=kubernetes&logoColor=white)
 ![ArgoCD](https://img.shields.io/badge/GitOps-ArgoCD-EF7B4D?logo=argo)
 ![Karpenter](https://img.shields.io/badge/Autoscaling-Karpenter-FF6600)
 ![Trivy](https://img.shields.io/badge/Security-Trivy-00A4C6?logo=trivy)
-![Multi-Cloud](https://img.shields.io/badge/Multi--Cloud-AWS%20%7C%20GCP-blueviolet)
 
-# Multi-Cloud Hardened Infrastructure — AWS EKS & GCP GKE
+# Hardened Cloud-Native Infrastructure — Enterprise AWS EKS & Bottlerocket
 
 [🇺🇸 English](README.md) | [🇯🇵 日本語](README.ja.md)
 
@@ -16,41 +14,32 @@
 Completed Milestones:
 - ✅ CKA (Certified Kubernetes Administrator) — Certified (2026)
 Target Certification:
-- 🎯 CKS (Certified Kubernetes Security Specialist) — Target Exam: November 2026 (Runtime hardening, Network Policies & Bottlerocket/COS immutability)
+- 🎯 CKS (Certified Kubernetes Security Specialist) — Target Exam: November 2026 (Runtime hardening, Network Policies & Bottlerocket immutability)
 
 ---
 
 ## Executive Summary
 
-This repository delivers a **hardened, zero-trust multi-cloud Kubernetes platform** with 100% architectural parity between **AWS EKS** and **GCP GKE**, built entirely with Terraform and Kustomize and targeting a Cloud Infrastructure / Platform Engineer role.
+This repository delivers a **production-grade, zero-trust AWS EKS hardened infrastructure** built on **Bottlerocket** and **eBPF**, built entirely with Terraform and Kustomize and targeting a Cloud Infrastructure / Platform Engineer role.
 
-The platform is not a theoretical blueprint — every security control has been operationally verified across a **KVM hypervisor sandbox** (codename: *Hobgoblin*), a hardened **AWS EKS production cluster**, and a **private GCP GKE Standard cluster** with Shielded COS nodes and Cloud KMS CMEK. Phase 6 completed full-stack observability and autoscaling validation: 4,635 requests at 0% error rate under a k6 spike load scenario with HPA scaling confirmed via Grafana dashboards.
+The platform is not a theoretical blueprint — every security control has been operationally verified across a **KVM hypervisor sandbox** (codename: *Hobgoblin*) and a hardened **AWS EKS production cluster**. Phase 6 completed full-stack observability and autoscaling validation: 4,635 requests at 0% error rate under a k6 spike load scenario with HPA scaling confirmed via Grafana dashboards. It also verified zero-SSH Bottlerocket host access and kernel-level NetworkPolicy enforcement via AWS VPC CNI eBPF.
 
-### Cloud Parity Matrix
+### AWS EKS Hardening & Security Controls
 
-| Feature | AWS EKS | GCP GKE |
+| Control Area | Mechanism | Outcome |
 |---|---|---|
-| Node OS | Bottlerocket (read-only root, no shell) | Container-Optimized OS + Shielded Nodes (vTPM, Secure Boot) |
-| Secrets Encryption | KMS envelope encryption | Cloud KMS CMEK for etcd |
-| Pod Identity | IRSA (IAM Role for Service Accounts) | Workload Identity (`<project>.svc.id.goog`) |
-| Ingress / Load Balancer | AWS Load Balancer Controller (ALB) | GKE Gateway API + Cloud Load Balancing (NEGs) |
-| Node Autoscaling | Karpenter (JIT, spot-aware) | GKE Cluster Autoscaler (built-in) |
-| Network | 3-tier VPC (module), NAT GW, VPC Flow Logs | VPC-Native (secondary IP ranges), Cloud NAT |
-| Registry | Amazon ECR | Artifact Registry (placeholder) |
-| Overlay path | `kubernetes/apps/overlays/prod/` | `kubernetes/apps/overlays/gcp-prod/` |
-| Deployment runbook | `docs/runbooks/eks-cloud-deployment.md` | `docs/runbooks/gke-cloud-deployment.md` |
-
-### What This Platform Enforces (Both Clouds)
-
-| Control Class | AWS Mechanism | GCP Mechanism |
-|---|---|---|
-| No public node access | Bottlerocket — no shell, read-only root FS | COS_CONTAINERD + Shielded Nodes — Secure Boot, vTPM |
-| Least-privilege pod identity | IRSA (OIDC) | Workload Identity (`iam.gke.io/gcp-service-account`) |
-| Encrypted secrets | AWS KMS CMKs, `enable_key_rotation = true` | Cloud KMS CMEK, 90-day rotation |
-| Container security & image gate | Aqua Trivy image scan in CI pipeline | Same pipeline (provider-agnostic) |
-| Runtime threat detection | GuardDuty EKS Runtime Monitoring | GKE Security Posture + Binary Authorization (hook) |
-| IaC & repo security gate | Checkov + Trivy FS scan in GitHub Actions | Same pipeline (provider-agnostic) |
-| Centralized audit logging | Fluent Bit → Amazon OpenSearch SIEM | GKE Cloud Logging (system + workloads) |
+| Node OS | **Bottlerocket** — immutable OS, read-only root FS, no SSH or shell on the host; accessed via SSM Session Manager → admin container / `sheltie` | No public node access; tamper-resistant hosts |
+| Secrets encryption | **KMS envelope encryption** — AWS KMS CMKs, `enable_key_rotation = true` | Secrets encrypted at rest in etcd |
+| Pod identity | **IRSA** (IAM Roles for Service Accounts / OIDC) | Least-privilege pod identity, no static credentials |
+| Network policy | **AWS VPC CNI eBPF** — `enableNetworkPolicy=true`, `default-deny-ingress` | Kernel-level packet drop without a user-space proxy |
+| Node autoscaling | **Karpenter** (JIT, spot-aware, Bottlerocket nodes) | Nodes provisioned in seconds, cost-optimised |
+| Ingress / Load Balancer | AWS Load Balancer Controller (ALB, IP target mode) | Direct-to-pod traffic path |
+| Runtime threat detection | GuardDuty EKS Runtime Monitoring | Detection of suspicious runtime behaviour |
+| Container security & image gate | Aqua Trivy image scan in CI, Amazon ECR | Vulnerable images blocked from the supply chain |
+| IaC & repo security gate | Checkov + Trivy FS scan in GitHub Actions | Misconfigurations caught before apply |
+| Centralized audit logging | Fluent Bit → Amazon OpenSearch SIEM, VPC Flow Logs | Preserved audit trail |
+| Network | 3-tier VPC (module), NAT GW, WAFv2 | Perimeter defence and subnet isolation |
+| Deployment runbook | `docs/runbooks/eks-cloud-deployment.md` | Step-by-step with evidence capture points |
 
 ---
 
@@ -77,20 +66,20 @@ The diagram below is the primary reference architecture for this platform. It il
 
 ## Architecture & Design Principles
 
-### Three-Tier Hybrid Validation Strategy
+### Two-Tier Hybrid Validation Strategy
 
 Risk and cost are reduced by validating all OS hardening patterns locally before incurring cloud spend:
 
 ```
-+----------------------------+    +----------------------------+    +----------------------------+
-|  Tier 1: KVM (Hobgoblin)   | -> |  Tier 2: AWS EKS Prod      | -> |  Tier 3: GCP GKE Prod      |
-|                            |    |                            |    |                            |
-|  Terraform + libvirt       |    |  terraform-aws-modules     |    |  google provider ~> 5.0    |
-|  Ubuntu 22.04 cloud-init   |    |  Bottlerocket node groups  |    |  COS_CONTAINERD + Shielded |
-|  Bastion + control-plane   |    |  Private API (no public)   |    |  Private cluster + Cloud NAT|
-|  cloud-init OS hardening   |    |  KMS CMKs, IRSA, GuardDuty |    |  Cloud KMS CMEK, Workload  |
-|  k6 + HPA + Prometheus     |    |  Karpenter JIT + ALB       |    |  Identity, Gateway API NEGs|
-+----------------------------+    +----------------------------+    +----------------------------+
++----------------------------+    +------------------------------+
+|  Tier 1: KVM (Hobgoblin)   | -> |  Tier 2: AWS EKS Prod        |
+|                            |    |                              |
+|  Terraform + libvirt       |    |  terraform-aws-modules       |
+|  Ubuntu 22.04 cloud-init   |    |  Bottlerocket node groups    |
+|  Bastion + control-plane   |    |  Private API (no public)     |
+|  cloud-init OS hardening   |    |  KMS CMKs, IRSA, GuardDuty   |
+|  k6 + HPA + Prometheus     |    |  VPC CNI eBPF, Karpenter+ALB |
++----------------------------+    +------------------------------+
 ```
 
 **Tier 1 — Hobgoblin KVM Lab topology:**
@@ -319,7 +308,7 @@ export const options = {
 
 ## Proof of Work — Deployment Evidence
 
-> The five screenshots below constitute end-to-end operational evidence of the AWS EKS platform lifecycle: IaC provisioning → node readiness → ingress provisioning → observability validation → clean teardown. Every artefact was captured live from the production cluster (`eks-hardened-prod`, `ap-northeast-1`) and the Hobgoblin KVM sandbox. No screenshots are mocked or staged.
+> The six evidence items below (E-01 – E-06) constitute end-to-end operational evidence of the AWS EKS platform lifecycle: IaC provisioning → node readiness → ingress provisioning → observability validation → clean teardown → Bottlerocket hardening & eBPF network policy. Every artefact was captured live from the production cluster (`eks-hardened-prod`, `ap-northeast-1`) and the Hobgoblin KVM sandbox. No screenshots are mocked or staged.
 
 ### Evidence Summary Table
 
@@ -330,6 +319,7 @@ export const options = {
 | E-03 | Phase 3 — Ingress Provisioning | AWS ALB provisioned by Load Balancer Controller; application pods serving traffic | `ADDRESS: k8s-default-secureap-7ccd2624ee-13995771.ap-northeast-1.elb.amazonaws.com` | ![](assets/Ingress-Pod-Ready.png) |
 | E-04 | Phase 4 — Observability | Prometheus PromQL recording rule `job:http_requests_total:rate5m` returning live result series | 4 series across handlers (`/healthz`, `/metrics`, `/`, `none`) and status codes (`2xx`, `4xx`) | ![](assets/Prometheus-Rate5m.png) |
 | E-05 | Phase 5 — Clean Teardown | `terraform destroy` completes with zero dangling resources | `Destroy complete! Resources: 99 destroyed.` | ![](assets/Terraform-Destroy-Complete.png) |
+| E-06 | Phase 6 — Bottlerocket Hardening & eBPF Network Policy | Zero-SSH node administration and kernel-level ingress traffic filtering | Verified Bottlerocket via SSM/sheltie + NetworkPolicy packet drop via eBPF (`exit code 28`) | [![](assets/02-default-deny-netpol.png)](#e-06--phase-6--bottlerocket-hardening--ebpf-network-policy) |
 
 ---
 
@@ -379,6 +369,40 @@ export const options = {
 
 ---
 
+### E-06 · Phase 6 — Bottlerocket Hardening & eBPF Network Policy
+
+> **What it proves:** Nodes are administered with zero SSH, and ingress traffic is filtered in the kernel by eBPF. Three controls are evidenced below: the immutable Bottlerocket host, SSM-based host access, and AWS VPC CNI NetworkPolicy enforcement.
+
+#### Architecture & Hardening — Bottlerocket Immutable OS
+
+> **Note — AMI upgrade:** the Phase 2 evidence (E-02) was captured on Bottlerocket OS 1.63.0. In Phase 6 the node AMI was upgraded to **Bottlerocket OS 1.68.1**, which is the version shown in the screenshots below. E-02 is kept unchanged as the historical Phase 2 record.
+
+> Bottlerocket is a purpose-built container host OS: immutable root filesystem, no SSH daemon, and no general-purpose shell or package manager on the host. Node group AMI type is set to Bottlerocket and verified with `kubectl get nodes -o wide`, which reports **Bottlerocket OS 1.68.1**.
+
+![Bottlerocket AMI selection for the EKS node group](assets/02-bottleRocket-select.png)
+
+![kubectl get nodes -o wide — OS-IMAGE reports Bottlerocket OS 1.68.1](assets/02-get-nodes-owide.png)
+
+#### Host Access via SSM — Control Container → Admin Container → `sheltie`
+
+> Hosts are reached without SSH through **AWS SSM Session Manager**. The session lands in the Bottlerocket *control container*; `enter-admin-container` switches to the *admin container*, and `sheltie` provides a root shell in the host namespace for inspection. The OS release and the `/sys/fs/bpf` eBPF mount point were verified from this shell.
+
+![SSM Session Manager — enter-admin-container → sheltie; OS release and /sys/fs/bpf verified](assets/02-ssm-2-bottlerocket.png)
+
+#### VPC CNI eBPF NetworkPolicy — Kernel-Level Packet Drop
+
+> The EKS VPC CNI add-on is configured with `enableNetworkPolicy=true`, so policies are enforced by eBPF programs attached in the kernel, without a user-space proxy or sidecar overhead.
+
+![EKS cluster configuration for eBPF-based network policy](assets/02-eks-ebpf.png)
+
+![VPC CNI add-on configuration — enableNetworkPolicy=true](assets/02-enable-netpol-true.png)
+
+> **Validation:** `curl` to the target pod succeeds before the policy is applied. After applying the `default-deny-ingress` NetworkPolicy, the same request is dropped and times out with **`exit code 28`**, confirming enforcement by eBPF.
+
+![default-deny-ingress NetworkPolicy — curl succeeds before policy, exit code 28 (timeout) after](assets/02-default-deny-netpol.png)
+
+---
+
 ## Security Control Matrix
 
 | Domain | Control | Threat Addressed | Verification |
@@ -397,7 +421,7 @@ export const options = {
 ## Repository Structure
 
 ```text
-Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infrastructure)
+Cloud-Native-Hardened-Infrastructure/
 |
 +-- .github/
 |   +-- workflows/
@@ -420,7 +444,6 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 +-- docs/
 |   +-- runbooks/
 |       +-- eks-cloud-deployment.md   # AWS EKS: deploy & teardown checklist (5 evidence screenshots)
-|       +-- gke-cloud-deployment.md   # GCP GKE: deploy & teardown checklist (5 evidence screenshots)
 |
 +-- kubernetes/
 |   +-- apps/
@@ -440,13 +463,6 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |   |       |   +-- hpa.yaml               # HPA: min=2, max=10, CPU=60%
 |   |       |   +-- ingress.yaml           # AWS ALB Ingress (IP target mode)
 |   |       |   +-- kustomization.yaml
-|   |       +-- gcp-prod/             # GCP GKE overlay (Tier 3) [NEW]
-|   |           +-- serviceaccount.yaml    # Workload Identity annotation -> iam.gke.io/gcp-service-account
-|   |           +-- gateway.yaml           # GKE Gateway API + HTTPRoute (Cloud LB / NEGs)
-|   |           +-- patch-service.yaml     # cloud.google.com/neg annotation (container-native LB)
-|   |           +-- patch-deployment.yaml  # Identical security context (cloud-agnostic)
-|   |           +-- hpa.yaml               # HPA: min=2, max=10, CPU=60% (cloud-agnostic)
-|   |           +-- kustomization.yaml     # commonLabels: cloud=gcp, env=prod
 |   |
 |   +-- argocd/                       # GitOps Application manifests
 |   |   +-- app-local.yaml
@@ -473,14 +489,6 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |   |   |   +-- main.tf               # Wires: vpc + eks + security + observability + ecr
 |   |   |   +-- providers.tf
 |   |   |   +-- variables.tf
-|   |   +-- gcp-gke/                  # GCP GKE root module (Tier 3) [NEW]
-|   |   |   +-- providers.tf          # google ~> 5.0 provider; commented GCS remote backend
-|   |   |   +-- variables.tf          # project_id, project_number, region, authorized_cidr
-|   |   |   +-- vpc.tf                # VPC-Native, secondary IP ranges (pods/services), Cloud NAT
-|   |   |   +-- kms.tf                # Cloud KMS KeyRing + CryptoKey (etcd CMEK, 90-day rotation)
-|   |   |   +-- gke.tf                # Private GKE cluster: COS, Shielded, Workload Identity, Gateway API
-|   |   |   +-- iam.tf                # GCP SA + Workload Identity binding (roles/iam.workloadIdentityUser)
-|   |   |   +-- outputs.tf            # cluster_name, endpoint, CA cert, KMS key, GSA email
 |   |   +-- local-hob/                # KVM Hobgoblin sandbox root module (Tier 1)
 |   |       +-- main.tf
 |   |       +-- variables.tf
@@ -501,6 +509,12 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |   +-- Ingress-Pod-Ready.png         # E-03: AWS ALB provisioned, application pods 1/1 Running
 |   +-- Prometheus-Rate5m.png         # E-04: PromQL recording rule job:http_requests_total:rate5m
 |   +-- Terraform-Destroy-Complete.png  # E-05: terraform destroy — 99 resources destroyed
+|   +-- 02-bottleRocket-select.png    # E-06: Bottlerocket AMI selection
+|   +-- 02-get-nodes-owide.png        # E-06: Bottlerocket OS 1.68.1 node verification
+|   +-- 02-ssm-2-bottlerocket.png     # E-06: SSM -> admin container -> sheltie, /sys/fs/bpf
+|   +-- 02-eks-ebpf.png               # E-06: EKS eBPF network policy configuration
+|   +-- 02-enable-netpol-true.png     # E-06: VPC CNI enableNetworkPolicy=true
+|   +-- 02-default-deny-netpol.png    # E-06: default-deny-ingress, exit code 28
 |   +-- grafana.png                   # Phase 6: HPA scale-out & CPU utilisation dashboard
 |   +-- hpa-result.png                # Phase 6: k6 spike test — 4,635 reqs, 0% error
 |   +-- kvm-evidence.png              # Phase 6: KVM Tier-1 Prometheus + HPA live validation
@@ -559,14 +573,12 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 
 > Full step-by-step checklists with evidence capture points are in [`docs/runbooks/`](docs/runbooks/):
 > - **AWS EKS:** [`eks-cloud-deployment.md`](docs/runbooks/eks-cloud-deployment.md)
-> - **GCP GKE:** [`gke-cloud-deployment.md`](docs/runbooks/gke-cloud-deployment.md)
 
 ### Prerequisites
 
 ```bash
 terraform >= 1.5
 AWS CLI v2      (configured with ap-northeast-1 default region)
-gcloud CLI      (authenticated: gcloud auth login)
 kubectl >= 1.28
 k6              (load testing — https://k6.io/docs/get-started/installation/)
 argocd CLI      (optional, for manual sync inspection)
@@ -608,57 +620,6 @@ aws elbv2 describe-load-balancers \
 cd terraform/environments/prod && terraform destroy --auto-approve
 ```
 
-### GCP GKE — Deploy & Validate
-
-```bash
-# 1. Enable APIs and set project
-gcloud services enable container.googleapis.com cloudkms.googleapis.com \
-  compute.googleapis.com iam.googleapis.com
-
-# 2. Create terraform.tfvars
-cat > terraform/environments/gcp-gke/terraform.tfvars << EOF
-project_id                 = "<YOUR_PROJECT_ID>"
-project_number             = "$(gcloud projects describe <YOUR_PROJECT_ID> --format='value(projectNumber)')"
-region                     = "asia-northeast1"
-gke_master_authorized_cidr = "<YOUR_IP>/32"
-EOF
-
-# 3. Provision infrastructure
-cd terraform/environments/gcp-gke
-terraform init && terraform plan -out=tfplan && terraform apply tfplan
-
-# 4. Connect kubectl
-gcloud container clusters get-credentials gke-prod-cluster \
-  --region asia-northeast1 --project <YOUR_PROJECT_ID>
-kubectl get nodes -o wide   # confirm COS + Ready
-
-# 5. Verify Gateway API CRDs
-kubectl get gatewayclass gke-l7-global-external-managed
-
-# 6. Patch ServiceAccount annotation and deploy
-sed -i 's/<PROJECT_ID>/<YOUR_PROJECT_ID>/g' \
-  kubernetes/apps/overlays/gcp-prod/serviceaccount.yaml
-kubectl apply -k kubernetes/observability/
-kubectl apply -k kubernetes/apps/overlays/gcp-prod/
-kubectl get pods,svc,gateway,httproute -n default -o wide
-
-# 7. Test via Gateway IP
-GATEWAY_IP=$(kubectl get gateway secure-api-gateway -o jsonpath='{.status.addresses[0].value}')
-curl -I http://$GATEWAY_IP/healthz
-```
-
-### GCP GKE — Safe Teardown
-
-```bash
-# ⚠️  Delete workloads BEFORE terraform destroy to avoid dangling Cloud LBs and Persistent Disks
-kubectl delete -k kubernetes/apps/overlays/gcp-prod/
-kubectl delete -k kubernetes/observability/
-kubectl delete pvc --all -A
-gcloud compute forwarding-rules list --filter="description~secure-api"
-# (wait for empty output, then:)
-cd terraform/environments/gcp-gke && terraform destroy --auto-approve
-```
-
 ### Bootstrap ArgoCD GitOps (AWS EKS)
 
 ```bash
@@ -673,16 +634,14 @@ argocd app list
 
 ## Platform Roadmap
 
-### ✅ Completed — Multi-Cloud Hardened Kubernetes Platform (current)
+### ✅ Completed — AWS EKS Hardened Kubernetes Platform (current)
 
 | Milestone | Status | Evidence |
 |---|---|---|
 | CKA (Certified Kubernetes Administrator) | ✅ Certified 2026 | — |
-| AWS EKS hardened baseline (Bottlerocket, IRSA, KMS, WAFv2, GuardDuty) | ✅ Deployed & validated | E-01 – E-05 (see [Proof of Work](#proof-of-work--deployment-evidence)) · Phase 6: 4,635 reqs, 0% error |
+| AWS EKS hardened baseline (Bottlerocket, IRSA, KMS, WAFv2, GuardDuty) | ✅ Deployed & validated | E-01 – E-06 (see [Proof of Work](#proof-of-work--deployment-evidence)) · Phase 6: 4,635 reqs, 0% error |
 | Full-stack observability (Prometheus, Grafana, Fluent Bit → OpenSearch) | ✅ Validated | E-04: PromQL `job:http_requests_total:rate5m` · Grafana HPA dashboard |
-| GCP GKE parity (COS + Shielded, Workload Identity, KMS CMEK, Gateway API) | ✅ Implemented | `terraform/environments/gcp-gke/` |
-| Multi-cloud Kustomize overlays (`prod/` + `gcp-prod/`) | ✅ Implemented | `kubectl kustomize` clean render |
-| Deployment runbooks with evidence capture (AWS + GCP) | ✅ Committed | `docs/runbooks/` · [Proof of Work](#proof-of-work--deployment-evidence) |
+| Deployment runbooks with evidence capture | ✅ Committed | `docs/runbooks/` · [Proof of Work](#proof-of-work--deployment-evidence) |
 
 ### 📊 Observability Evidence — PCA-Aligned (No Exam Planned)
 
@@ -702,7 +661,7 @@ argocd app list
 | Focus Area | Mechanism | Status |
 |---|---|---|
 | Runtime security | Falco / GuardDuty EKS Runtime Monitoring | 🎯 CKS target |
-| Network microsegmentation | EKS Network Policy + Calico (GKE) | 🎯 CKS target |
+| Network microsegmentation | EKS Network Policy + AWS VPC CNI eBPF | 🎯 CKS target |
 | Secrets management | External Secrets Operator + AWS Secrets Manager | 🎯 CKS target |
 | CI/CD & Pipeline security | Aqua Trivy + Checkov gates in CI | ✅ Implemented |
 
@@ -711,17 +670,9 @@ argocd app list
 ## Release & Tagging
 
 ```bash
-git add terraform/environments/gcp-gke/ kubernetes/apps/overlays/gcp-prod/ \
-        docs/runbooks/gke-cloud-deployment.md README.md README.ja.md
-git commit -m "feat(gcp): add GKE hardened infrastructure — multi-cloud parity complete
-
-- terraform/environments/gcp-gke/: VPC-native, Cloud KMS CMEK, private GKE
-  cluster (COS + Shielded Nodes), Workload Identity, Gateway API
-- kubernetes/apps/overlays/gcp-prod/: Gateway+HTTPRoute, NEG patch, WI SA
-- docs/runbooks/gke-cloud-deployment.md: full ASCII checklist, 5 evidence pts
-- README: updated to reflect multi-cloud platform status"
-git tag -a v2.0.0-multi-cloud -m "Multi-cloud: AWS EKS + GCP GKE hardened parity complete"
-git push origin main --tags
+git add README.md README.ja.md
+git commit -m "docs: reposition as AWS EKS hardened infrastructure (Bottlerocket + eBPF)"
+git push origin main
 ```
 
 ---

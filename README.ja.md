@@ -1,14 +1,12 @@
 ![Build Status](https://github.com/Jira-saki/Cloud-Native-Hardened-Infrastructure/workflows/DevSecOps%20Infrastructure%20Pipeline/badge.svg)
 ![Terraform](https://img.shields.io/badge/Terraform-1.x-7B42BC?logo=terraform)
 ![AWS EKS](https://img.shields.io/badge/AWS-EKS-FF9900?logo=amazonaws)
-![GCP GKE](https://img.shields.io/badge/GCP-GKE-4285F4?logo=googlecloud&logoColor=white)
 ![CKA](https://img.shields.io/badge/Kubernetes-CKA%20Certified-326CE5?logo=kubernetes&logoColor=white)
 ![ArgoCD](https://img.shields.io/badge/GitOps-ArgoCD-EF7B4D?logo=argo)
 ![Karpenter](https://img.shields.io/badge/Autoscaling-Karpenter-FF6600)
 ![Trivy](https://img.shields.io/badge/Security-Trivy-00A4C6?logo=trivy)
-![Multi-Cloud](https://img.shields.io/badge/Multi--Cloud-AWS%20%7C%20GCP-blueviolet)
 
-# マルチクラウド要塞化インフラストラクチャ — AWS EKS & GCP GKE
+# Hardened Cloud-Native Infrastructure — Enterprise AWS EKS & Bottlerocket
 
 [🇺🇸 English](README.md) | [🇯🇵 日本語](README.ja.md)
 
@@ -16,41 +14,32 @@
 達成済みマイルストーン:
 - ✅ CKA (Certified Kubernetes Administrator) — 認定取得 (2026)
 目標認定資格:
-- 🎯 CKS (Certified Kubernetes Security Specialist) — 受験予定: 2026年11月 (ランタイム要塞化、ネットワークポリシー、Bottlerocket/COSのイミュータビリティ)
+- 🎯 CKS (Certified Kubernetes Security Specialist) — 受験予定: 2026年11月 (ランタイム要塞化、ネットワークポリシー、Bottlerocketのイミュータビリティ)
 
 ---
 
 ## エグゼクティブサマリー (Executive Summary)
 
-本リポジトリは、**AWS EKS** と **GCP GKE** の間でアーキテクチャの完全な等価性（100%パリティ）を備えた、**要塞化されたゼロトラスト・マルチクラウドKubernetesプラットフォーム**を提供します。TerraformとKustomizeを用いて完全に構築されており、クラウドインフラ/プラットフォームエンジニアとしての実践力を示すポートフォリオです。
+本リポジトリは、**Bottlerocket** と **eBPF** を備えた、**本番グレードのゼロトラストなAWS EKS要塞化インフラストラクチャ**を提供します。TerraformとKustomizeを用いて完全に構築されており、クラウドインフラ/プラットフォームエンジニアとしての実践力を示すポートフォリオです。
 
-本プラットフォームは理論上の設計図にとどまりません。すべてのセキュリティ統制は、**KVMハイパーバイザーサンドボックス**（コードネーム: *Hobgoblin*）、要塞化された**AWS EKS本番クラスター**、およびShielded COSノードとCloud KMS CMEKを備えた**プライベートGCP GKE Standardクラスター**にわたって実運用検証されています。Phase 6ではフルスタック可観測性とオートスケーリングの検証を完了し、k6スパイク負荷シナリオ（4,635リクエスト、エラー率0%）においてHPAスケーリングがGrafanaダッシュボードで確認されました。
+本プラットフォームは理論上の設計図にとどまりません。すべてのセキュリティ統制は、**KVMハイパーバイザーサンドボックス**（コードネーム: *Hobgoblin*）と、要塞化された**AWS EKS本番クラスター**にわたって実運用検証されています。Phase 6ではフルスタック可観測性とオートスケーリングの検証を完了し、k6スパイク負荷シナリオ（4,635リクエスト、エラー率0%）においてHPAスケーリングがGrafanaダッシュボードで確認されました。あわせて、Bottlerocketホストへの SSH 不要なアクセスと、AWS VPC CNI の eBPF によるカーネルレベルの NetworkPolicy 強制も検証済みです。
 
-### クラウド機能対照表 (Cloud Parity Matrix)
+### AWS EKS 要塞化 & セキュリティ統制マトリクス (AWS EKS Hardening & Security Controls)
 
-| 機能 | AWS EKS | GCP GKE |
+| 統制領域 | 実装機構 | 効果 |
 |---|---|---|
-| ノードOS | Bottlerocket (読み取り専用ルート、シェルなし) | Container-Optimized OS + Shielded Nodes (vTPM、セキュアブート) |
-| Secret暗号化 | KMSエンベロープ暗号化 | etcd向けCloud KMS CMEK |
-| Pod ID管理 | IRSA (IAM Roles for Service Accounts) | Workload Identity (`<project>.svc.id.goog`) |
-| Ingress / ロードバランサ | AWS Load Balancer Controller (ALB) | GKE Gateway API + Cloud Load Balancing (NEGs) |
-| ノードオートスケーリング | Karpenter (JIT、Spot対応) | GKE Cluster Autoscaler (組み込み) |
-| ネットワーク | 3層VPC (モジュール)、NAT GW、VPC Flow Logs | VPC-Native (セカンダリIPレンジ)、Cloud NAT |
-| レジストリ | Amazon ECR | Artifact Registry (プレースホルダー) |
-| オーバーレイパス | `kubernetes/apps/overlays/prod/` | `kubernetes/apps/overlays/gcp-prod/` |
-| デプロイ手順書 (Runbook) | `docs/runbooks/eks-cloud-deployment.md` | `docs/runbooks/gke-cloud-deployment.md` |
-
-### 本プラットフォームが強制する統制 (両クラウド共通)
-
-| 統制クラス | AWS実装機構 | GCP実装機構 |
-|---|---|---|
-| ノードへのパブリックアクセス排除 | Bottlerocket — シェルなし、読み取り専用ルートファイルシステム | COS_CONTAINERD + Shielded Nodes — セキュアブート、vTPM |
-| 最小権限のPod ID管理 | IRSA (OIDC) | Workload Identity (`iam.gke.io/gcp-service-account`) |
-| 暗号化されたSecret | AWS KMS CMK、`enable_key_rotation = true` | Cloud KMS CMEK、90日自動ローテーション |
-| コンテナセキュリティ & イメージ脆弱性ゲート | CIパイプラインでのAqua Trivyイメージスキャン | 同一パイプライン (プロバイダー非依存) |
-| ランタイム脅威検知 | GuardDuty EKS Runtime Monitoring | GKE Security Posture + Binary Authorization (フック) |
-| IaC & リポジトリセキュリティゲート | GitHub ActionsにおけるCheckov + Trivy FSスキャン | 同一パイプライン (プロバイダー非依存) |
-| 集中監査ログ | Fluent Bit → Amazon OpenSearch SIEM | GKE Cloud Logging (システム + ワークロード) |
+| ノードOS | **Bottlerocket** — 不変(ふかへん)OS、読み取り専用ルートファイルシステム、ホスト上にSSH・シェルなし。SSM Session Manager 経由の管理コンテナ / `sheltie` でアクセス | ノードへのパブリックアクセス排除、ホスト改ざん耐性 |
+| Secret暗号化 | **KMSエンベロープ暗号化** — AWS KMS CMK、`enable_key_rotation = true` | etcd 内の Secret を保存時に暗号化 |
+| Pod ID管理 | **IRSA** (IAM Roles for Service Accounts / OIDC) | 静的認証情報なしの最小権限Pod ID |
+| ネットワークポリシー | **AWS VPC CNI eBPF** — `enableNetworkPolicy=true`、`default-deny-ingress` | ユーザー空間プロキシなしのカーネルレベルでのパケットドロップ |
+| ノードオートスケーリング | **Karpenter** (JIT、Spot対応、Bottlerocket ノード) | 数秒でのノード払い出しとコスト最適化 |
+| Ingress / ロードバランサ | AWS Load Balancer Controller (ALB、IPターゲットモード) | Pod IP への直接転送 |
+| ランタイム脅威検知 | GuardDuty EKS Runtime Monitoring | 実行時の不審挙動の検知 |
+| コンテナセキュリティ & イメージゲート | CIパイプラインでのAqua Trivyイメージスキャン、Amazon ECR | 脆弱なイメージの流入防止 |
+| IaC & リポジトリセキュリティゲート | GitHub ActionsにおけるCheckov + Trivy FSスキャン | IaC構成不備の事前検知 |
+| 集中監査ログ | Fluent Bit → Amazon OpenSearch SIEM、VPC Flow Logs | 監査証跡の保全 |
+| ネットワーク | 3層VPC (モジュール)、NAT GW、WAFv2 | 境界防御とサブネット分離 |
+| デプロイ手順書 (Runbook) | `docs/runbooks/eks-cloud-deployment.md` | エビデンス取得ポイント付き手順 |
 
 ---
 
@@ -77,20 +66,20 @@
 
 ## アーキテクチャ & 設計原則 (Architecture & Design Principles)
 
-### 3層ハイブリッド検証戦略 (Three-Tier Hybrid Validation Strategy)
+### 2層ハイブリッド検証戦略 (Two-Tier Hybrid Validation Strategy)
 
 クラウドアカウントでのコスト発生前にローカル環境ですべてのOS要塞化パターンを検証することで、リスクとコストを最小化します:
 
 ```
-+----------------------------+    +----------------------------+    +----------------------------+
-|  Tier 1: KVM (Hobgoblin)   | -> |  Tier 2: AWS EKS Prod      | -> |  Tier 3: GCP GKE Prod      |
-|                            |    |                            |    |                            |
-|  Terraform + libvirt       |    |  terraform-aws-modules     |    |  google provider ~> 5.0    |
-|  Ubuntu 22.04 cloud-init   |    |  Bottlerocket node groups  |    |  COS_CONTAINERD + Shielded |
-|  Bastion + control-plane   |    |  Private API (no public)   |    |  Private cluster + Cloud NAT|
-|  cloud-init OS hardening   |    |  KMS CMKs, IRSA, GuardDuty |    |  Cloud KMS CMEK, Workload  |
-|  k6 + HPA + Prometheus     |    |  Karpenter JIT + ALB       |    |  Identity, Gateway API NEGs|
-+----------------------------+    +----------------------------+    +----------------------------+
++----------------------------+    +------------------------------+
+|  Tier 1: KVM (Hobgoblin)   | -> |  Tier 2: AWS EKS Prod        |
+|                            |    |                              |
+|  Terraform + libvirt       |    |  terraform-aws-modules       |
+|  Ubuntu 22.04 cloud-init   |    |  Bottlerocket node groups    |
+|  Bastion + control-plane   |    |  Private API (no public)     |
+|  cloud-init OS hardening   |    |  KMS CMKs, IRSA, GuardDuty   |
+|  k6 + HPA + Prometheus     |    |  VPC CNI eBPF, Karpenter+ALB |
++----------------------------+    +------------------------------+
 ```
 
 **Tier 1 — Hobgoblin KVMラボトポロジー:**
@@ -319,7 +308,7 @@ export const options = {
 
 ## 実績のエビデンス — デプロイメント検証記録 (Proof of Work)
 
-> 以下の5枚のスクリーンショットは、IaCプロビジョニング → ノードレディ状態 → Ingressプロビジョニング → 可観測性の検証 → クリーンな破棄に至るAWS EKSプラットフォームのライフサイクル全体のエンドツーエンド実運用エビデンスです。すべての成果物は本番クラスター (`eks-hardened-prod`, `ap-northeast-1`) およびHobgoblin KVMサンドボックスから取得されたものであり、モックや捏造は一切ありません。
+> 以下の6件のエビデンス (E-01 – E-06) は、IaCプロビジョニング → ノードレディ状態 → Ingressプロビジョニング → 可観測性の検証 → クリーンな破棄 → Bottlerocket の要塞化 & eBPF ネットワークポリシーに至るAWS EKSプラットフォームのライフサイクル全体のエンドツーエンド実運用エビデンスです。すべての成果物は本番クラスター (`eks-hardened-prod`, `ap-northeast-1`) およびHobgoblin KVMサンドボックスから取得されたものであり、モックや捏造は一切ありません。
 
 ### エビデンスサマリー表
 
@@ -330,6 +319,7 @@ export const options = {
 | E-03 | Phase 3 — Ingress プロビジョニング | Load Balancer ControllerによるAWS ALBの自動構成とアプリPodの通信応答 | `ADDRESS: k8s-default-secureap-7ccd2624ee-13995771.ap-northeast-1.elb.amazonaws.com` | ![](assets/Ingress-Pod-Ready.png) |
 | E-04 | Phase 4 — 可観測性 | Prometheus PromQL レコーディングルール `job:http_requests_total:rate5m` の結果系列 | ハンドラー (`/healthz`, `/metrics`, `/`, `none`) およびステータスコード (`2xx`, `4xx`) を網羅する4系列 | ![](assets/Prometheus-Rate5m.png) |
 | E-05 | Phase 5 — クリーンな破棄 | 残存リソースゼロでの `terraform destroy` 完了 | `Destroy complete! Resources: 99 destroyed.` | ![](assets/Terraform-Destroy-Complete.png) |
+| E-06 | Phase 6 — Bottlerocket の要塞化 & eBPF ネットワークポリシー | SSH 不要のノード管理とカーネルレベルの Ingress トラフィックフィルタリング | SSM/sheltie 経由での Bottlerocket 検証(けんしょう) + eBPF による NetworkPolicy のパケットドロップ (`exit code 28`) | [![](assets/02-default-deny-netpol.png)](#e-06--phase-6--bottlerocket-の要塞化--ebpf-ネットワークポリシー) |
 
 ---
 
@@ -379,6 +369,40 @@ export const options = {
 
 ---
 
+### E-06 · Phase 6 — Bottlerocket の要塞化 & eBPF ネットワークポリシー
+
+> **証明する内容:** ノード管理を SSH なしで行い、Ingress トラフィックを eBPF によりカーネルレベルでフィルタリングできること。不変(ふかへん)な Bottlerocket ホスト、SSM 経由のホストアクセス、AWS VPC CNI による NetworkPolicy の強制という 3 つの統制を以下の証跡(しょうせき)で示します。
+
+#### アーキテクチャ & 要塞化 — Bottlerocket 不変OS
+
+> **補足 — AMI アップグレード:** Phase 2 の証跡(しょうせき) (E-02) は Bottlerocket OS 1.63.0 で取得したものです。Phase 6 でノードの AMI を **Bottlerocket OS 1.68.1** へアップグレードしており、以下のスクリーンショットはこのバージョンを示しています。E-02 は Phase 2 当時の記録としてそのまま残しています。
+
+> Bottlerocket はコンテナ実行に特化して設計されたホスト OS であり、ルートファイルシステムは不変(ふかへん)で、ホスト上に SSH デーモン、汎用シェル、パッケージマネージャーが存在しません。ノードグループの AMI タイプに Bottlerocket を選択し、`kubectl get nodes -o wide` で **Bottlerocket OS 1.68.1** であることを検証(けんしょう)しています。
+
+![EKS ノードグループでの Bottlerocket AMI の選択](assets/02-bottleRocket-select.png)
+
+![kubectl get nodes -o wide — OS-IMAGE が Bottlerocket OS 1.68.1 であることを確認](assets/02-get-nodes-owide.png)
+
+#### SSM 経由のホストアクセス — コントロールコンテナ → 管理コンテナ → `sheltie`
+
+> ホストへは SSH を使わず **AWS SSM Session Manager** で接続します。セッションは Bottlerocket の *コントロールコンテナ* に入り、`enter-admin-container` で *管理(admin)コンテナ* へ移行し、`sheltie` でホスト名前空間の root シェルを取得して調査します。このシェルから OS リリース情報と eBPF のマウントポイント `/sys/fs/bpf` を検証しました。
+
+![SSM Session Manager — enter-admin-container → sheltie、OS リリースと /sys/fs/bpf を検証](assets/02-ssm-2-bottlerocket.png)
+
+#### VPC CNI eBPF NetworkPolicy — カーネルレベルのパケットドロップ
+
+> EKS の VPC CNI アドオンで `enableNetworkPolicy=true` を設定し、ポリシーをカーネルにアタッチされた eBPF プログラムで強制します。ユーザー空間プロキシやサイドカーによるオーバーヘッドは発生しません。
+
+![eBPF ベースのネットワークポリシーのための EKS クラスター設定](assets/02-eks-ebpf.png)
+
+![VPC CNI アドオン設定 — enableNetworkPolicy=true](assets/02-enable-netpol-true.png)
+
+> **検証結果:** ポリシー適用前は対象 Pod への `curl` が成功します。`default-deny-ingress` NetworkPolicy の適用後は同じリクエストがドロップされ、**`exit code 28`** (タイムアウト) となり、eBPF による強制を確認できました。
+
+![default-deny-ingress NetworkPolicy — 適用前は curl 成功、適用後は exit code 28 (タイムアウト)](assets/02-default-deny-netpol.png)
+
+---
+
 ## セキュリティ統制マトリクス (Security Control Matrix)
 
 | ドメイン | 統制項目 | 対処する脅威 | 検証方法 |
@@ -397,7 +421,7 @@ export const options = {
 ## リポジトリ構成 (Repository Structure)
 
 ```text
-Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infrastructure)
+Cloud-Native-Hardened-Infrastructure/
 |
 +-- .github/
 |   +-- workflows/
@@ -420,7 +444,6 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 +-- docs/
 |   +-- runbooks/
 |       +-- eks-cloud-deployment.md   # AWS EKS: デプロイ & 破棄チェックリスト (5つのエビデンス画像)
-|       +-- gke-cloud-deployment.md   # GCP GKE: デプロイ & 破棄チェックリスト (5つのエビデンス画像)
 |
 +-- kubernetes/
 |   +-- apps/
@@ -440,13 +463,6 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |   |       |   +-- hpa.yaml               # HPA: min=2, max=10, CPU=60%
 |   |       |   +-- ingress.yaml           # AWS ALB Ingress (IPターゲットモード)
 |   |       |   +-- kustomization.yaml
-|   |       +-- gcp-prod/             # GCP GKE オーバーレイ (Tier 3)
-|   |           +-- serviceaccount.yaml    # Workload Identity アノテーション -> iam.gke.io/gcp-service-account
-|   |           +-- gateway.yaml           # GKE Gateway API + HTTPRoute (Cloud LB / NEGs)
-|   |           +-- patch-service.yaml     # cloud.google.com/neg アノテーション (コンテナネイティブLB)
-|   |           +-- patch-deployment.yaml  # 同一のセキュリティコンテキスト (クラウド非依存)
-|   |           +-- hpa.yaml               # HPA: min=2, max=10, CPU=60% (クラウド非依存)
-|   |           +-- kustomization.yaml     # commonLabels: cloud=gcp, env=prod
 |   |
 |   +-- argocd/                       # GitOps Application マニフェスト
 |   |   +-- app-local.yaml
@@ -473,14 +489,6 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |   |   |   +-- main.tf               # 接続: vpc + eks + security + observability + ecr
 |   |   |   +-- providers.tf
 |   |   |   +-- variables.tf
-|   |   +-- gcp-gke/                  # GCP GKE ルートモジュール (Tier 3)
-|   |   |   +-- providers.tf          # google ~> 5.0 プロバイダー、GCSリモートバックエンド設定
-|   |   |   +-- variables.tf          # project_id, project_number, region, authorized_cidr
-|   |   |   +-- vpc.tf                # VPC-Native, セカンダリIPレンジ (Pod/Service用), Cloud NAT
-|   |   |   +-- kms.tf                # Cloud KMS KeyRing + CryptoKey (etcd CMEK, 90日ローテーション)
-|   |   |   +-- gke.tf                # プライベートGKE: COS, Shielded, Workload Identity, Gateway API
-|   |   |   +-- iam.tf                # GCP SA + Workload Identityバインド (roles/iam.workloadIdentityUser)
-|   |   |   +-- outputs.tf            # cluster_name, endpoint, CA cert, KMS key, GSA email
 |   |   +-- local-hob/                # KVM Hobgoblin サンドボックスルートモジュール (Tier 1)
 |   |       +-- main.tf
 |   |       +-- variables.tf
@@ -501,6 +509,12 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 |   +-- Ingress-Pod-Ready.png         # E-03: AWS ALBプロビジョニング完了、アプリPod稼働中
 |   +-- Prometheus-Rate5m.png         # E-04: PromQLレコーディングルール job:http_requests_total:rate5m
 |   +-- Terraform-Destroy-Complete.png  # E-05: terraform destroy — 99リソース破棄完了
+|   +-- 02-bottleRocket-select.png    # E-06: Bottlerocket AMI の選択
+|   +-- 02-get-nodes-owide.png        # E-06: Bottlerocket OS 1.68.1 のノード検証
+|   +-- 02-ssm-2-bottlerocket.png     # E-06: SSM -> 管理コンテナ -> sheltie、/sys/fs/bpf
+|   +-- 02-eks-ebpf.png               # E-06: EKS eBPF ネットワークポリシー設定
+|   +-- 02-enable-netpol-true.png     # E-06: VPC CNI enableNetworkPolicy=true
+|   +-- 02-default-deny-netpol.png    # E-06: default-deny-ingress、exit code 28
 |   +-- grafana.png                   # Phase 6: HPAスケールアウト & CPU使用率ダッシュボード
 |   +-- hpa-result.png                # Phase 6: k6スパイクテスト — 4,635リクエスト、エラー率0%
 |   +-- kvm-evidence.png              # Phase 6: KVM Tier-1 Prometheus + HPA 実機検証
@@ -559,7 +573,6 @@ Multi-Cloud-Hardened-Infrastructure/         (repo: Cloud-Native-Hardened-Infras
 
 > エビデンス取得ポイントを含む詳細なステップバイステップのチェックリストは [`docs/runbooks/`](docs/runbooks/) を参照してください:
 > - **AWS EKS:** [`eks-cloud-deployment.md`](docs/runbooks/eks-cloud-deployment.md)
-> - **GCP GKE:** [`gke-cloud-deployment.md`](docs/runbooks/gke-cloud-deployment.md)
 
 ### 前提条件 (Prerequisites)
 
@@ -608,57 +621,6 @@ aws elbv2 describe-load-balancers \
 cd terraform/environments/prod && terraform destroy --auto-approve
 ```
 
-### GCP GKE — デプロイ & 検証
-
-```bash
-# 1. API の有効化とプロジェクト設定
-gcloud services enable container.googleapis.com cloudkms.googleapis.com \
-  compute.googleapis.com iam.googleapis.com
-
-# 2. terraform.tfvars の作成
-cat > terraform/environments/gcp-gke/terraform.tfvars << EOF
-project_id                 = "<YOUR_PROJECT_ID>"
-project_number             = "$(gcloud projects describe <YOUR_PROJECT_ID> --format='value(projectNumber)')"
-region                     = "asia-northeast1"
-gke_master_authorized_cidr = "<YOUR_IP>/32"
-EOF
-
-# 3. インフラのプロビジョニング
-cd terraform/environments/gcp-gke
-terraform init && terraform plan -out=tfplan && terraform apply tfplan
-
-# 4. kubectl の接続設定
-gcloud container clusters get-credentials gke-prod-cluster \
-  --region asia-northeast1 --project <YOUR_PROJECT_ID>
-kubectl get nodes -o wide   # COS + Ready 状態を確認
-
-# 5. Gateway API CRD の確認
-kubectl get gatewayclass gke-l7-global-external-managed
-
-# 6. ServiceAccount アノテーションの修正とデプロイ
-sed -i 's/<PROJECT_ID>/<YOUR_PROJECT_ID>/g' \
-  kubernetes/apps/overlays/gcp-prod/serviceaccount.yaml
-kubectl apply -k kubernetes/observability/
-kubectl apply -k kubernetes/apps/overlays/gcp-prod/
-kubectl get pods,svc,gateway,httproute -n default -o wide
-
-# 7. Gateway IP 経由での接続テスト
-GATEWAY_IP=$(kubectl get gateway secure-api-gateway -o jsonpath='{.status.addresses[0].value}')
-curl -I http://$GATEWAY_IP/healthz
-```
-
-### GCP GKE — 安全な破棄 (Safe Teardown)
-
-```bash
-# ⚠️  Cloud LBおよび永続ディスクの孤立を防ぐため、terraform destroy の前に必ずワークロードを削除すること
-kubectl delete -k kubernetes/apps/overlays/gcp-prod/
-kubectl delete -k kubernetes/observability/
-kubectl delete pvc --all -A
-gcloud compute forwarding-rules list --filter="description~secure-api"
-# (出力が空になるまで待機後、実行:)
-cd terraform/environments/gcp-gke && terraform destroy --auto-approve
-```
-
 ### ArgoCD GitOps のブートストラップ (AWS EKS)
 
 ```bash
@@ -673,16 +635,14 @@ argocd app list
 
 ## プラットフォームロードマップ (Platform Roadmap)
 
-### ✅ 完了 — マルチクラウド要塞化Kubernetesプラットフォーム (現在)
+### ✅ 完了 — AWS EKS 要塞化Kubernetesプラットフォーム (現在)
 
 | マイルストーン | ステータス | エビデンス |
 |---|---|---|
 | CKA (Certified Kubernetes Administrator) | ✅ 2026年認定取得 | — |
-| AWS EKS 要塞化ベースライン (Bottlerocket, IRSA, KMS, WAFv2, GuardDuty) | ✅ デプロイ & 検証完了 | E-01 – E-05 ([実績のエビデンス](#実績のエビデンス--デプロイメント検証記録-proof-of-work) 参照) · Phase 6: 4,635リクエスト、エラー率0% |
+| AWS EKS 要塞化ベースライン (Bottlerocket, IRSA, KMS, WAFv2, GuardDuty) | ✅ デプロイ & 検証完了 | E-01 – E-06 ([実績のエビデンス](#実績のエビデンス--デプロイメント検証記録-proof-of-work) 参照) · Phase 6: 4,635リクエスト、エラー率0% |
 | フルスタック可観測性 (Prometheus, Grafana, Fluent Bit → OpenSearch) | ✅ 検証完了 | E-04: PromQL `job:http_requests_total:rate5m` · Grafana HPAダッシュボード |
-| GCP GKE パリティ (COS + Shielded, Workload Identity, KMS CMEK, Gateway API) | ✅ 実装完了 | `terraform/environments/gcp-gke/` |
-| マルチクラウド Kustomize オーバーレイ (`prod/` + `gcp-prod/`) | ✅ 実装完了 | `kubectl kustomize` による正常レンダリング |
-| デプロイ手順書とエビデンス記録 (AWS + GCP) | ✅ コミット済み | `docs/runbooks/` · [実績のエビデンス](#実績のエビデンス--デプロイメント検証記録-proof-of-work) |
+| デプロイ手順書とエビデンス記録 | ✅ コミット済み | `docs/runbooks/` · [実績のエビデンス](#実績のエビデンス--デプロイメント検証記録-proof-of-work) |
 
 ### 📊 可観測性の実証 — PCA準拠 (試験受験予定なし)
 
@@ -702,7 +662,7 @@ argocd app list
 | フォーカス領域 | 実装機構 | ステータス |
 |---|---|---|
 | ランタイムセキュリティ | Falco / GuardDuty EKS Runtime Monitoring | 🎯 CKS ターゲット |
-| ネットワークマイクロセグメンテーション | EKS Network Policy + Calico (GKE) | 🎯 CKS ターゲット |
+| ネットワークマイクロセグメンテーション | EKS Network Policy + AWS VPC CNI eBPF | 🎯 CKS ターゲット |
 | シークレット管理 | External Secrets Operator + AWS Secrets Manager | 🎯 CKS ターゲット |
 | CI/CD & パイプラインセキュリティ | Aqua Trivy + Checkov ゲート (CI実装済み) | ✅ 実装完了 |
 
@@ -711,17 +671,9 @@ argocd app list
 ## リリース & タギング (Release & Tagging)
 
 ```bash
-git add terraform/environments/gcp-gke/ kubernetes/apps/overlays/gcp-prod/ \
-        docs/runbooks/gke-cloud-deployment.md README.md README.ja.md
-git commit -m "feat(gcp): add GKE hardened infrastructure — multi-cloud parity complete
-
-- terraform/environments/gcp-gke/: VPC-native, Cloud KMS CMEK, private GKE
-  cluster (COS + Shielded Nodes), Workload Identity, Gateway API
-- kubernetes/apps/overlays/gcp-prod/: Gateway+HTTPRoute, NEG patch, WI SA
-- docs/runbooks/gke-cloud-deployment.md: full ASCII checklist, 5 evidence pts
-- README: updated to reflect multi-cloud platform status"
-git tag -a v2.0.0-multi-cloud -m "Multi-cloud: AWS EKS + GCP GKE hardened parity complete"
-git push origin main --tags
+git add README.md README.ja.md
+git commit -m "docs: reposition as AWS EKS hardened infrastructure (Bottlerocket + eBPF)"
+git push origin main
 ```
 
 ---
