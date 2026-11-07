@@ -8,7 +8,6 @@
 
 # Hardened Cloud-Native Infrastructure — Enterprise AWS EKS & Bottlerocket
 
-[🇺🇸 English](README.md) | [🇯🇵 日本語](README.ja.md)
 
 🎯 Professional Roadmap & Certification Alignment
 Completed Milestones:
