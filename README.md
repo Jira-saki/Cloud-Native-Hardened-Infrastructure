@@ -429,8 +429,8 @@ kubectl apply -k kubernetes/apps/overlays/prod/
 kubectl get pods,svc,ingress -n default -o wide
 
 # 5. Run k6 spike test
-ALB_DNS=$(kubectl get ingress secure-api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-k6 run --env BASE_URL=http://$ALB_DNS tests/spike-test.js
+ALB_DNS=$(kubectl get ingress secure-api-ingress -n secure-api -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+k6 run --env TARGET_URL=http://$ALB_DNS tests/spike-test.js
 ```
 
 ### AWS EKS — Safe Teardown
