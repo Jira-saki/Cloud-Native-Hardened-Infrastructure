@@ -29,7 +29,7 @@ resource "aws_kms_key" "this" {
 # CloudWatch Log Group for VPC Flow Logs
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
   name              = "/aws/vpc/flow-logs-${var.environment}"
-  retention_in_days = 30
+  retention_in_days = 365
   kms_key_id        = var.kms_key_arn
 
   tags = {
@@ -41,7 +41,7 @@ resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
 # CloudWatch Log Group for Application & Container Logs (via Fluent Bit)
 resource "aws_cloudwatch_log_group" "container_logs" {
   name              = "/aws/eks/${var.cluster_name}/containers"
-  retention_in_days = 30
+  retention_in_days = 365
   kms_key_id        = var.kms_key_arn
 
   tags = {
