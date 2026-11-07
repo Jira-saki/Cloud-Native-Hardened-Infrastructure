@@ -22,7 +22,7 @@ Target Certification:
 
 This repository delivers a **production-grade, zero-trust AWS EKS hardened infrastructure** built on **Bottlerocket** and **eBPF**, built entirely with Terraform and Kustomize and targeting a Cloud Infrastructure / Platform Engineer role.
 
-The platform is not a theoretical blueprint — every security control has been operationally verified across a **KVM hypervisor sandbox** (codename: *Hobgoblin*) and a hardened **AWS EKS production cluster**. Phase 6 completed full-stack observability and autoscaling validation: 4,635 requests at 0% error rate under a k6 spike load scenario with HPA scaling confirmed via Grafana dashboards. It also verified zero-SSH Bottlerocket host access and kernel-level NetworkPolicy enforcement via AWS VPC CNI eBPF.
+The platform is not a theoretical blueprint — every security control has been operationally verified and hardened on AWS EKS with Bottlerocket OS. Phase 6 completed full-stack observability and autoscaling validation: 4,635 requests at 0% error rate under a k6 spike load scenario with HPA scaling confirmed via Grafana dashboards. It also verified zero-SSH Bottlerocket host access and kernel-level NetworkPolicy enforcement via AWS VPC CNI eBPF.
 
 ### AWS EKS Hardening & Security Controls
 
@@ -37,7 +37,7 @@ The platform is not a theoretical blueprint — every security control has been 
 | Runtime threat detection | GuardDuty EKS Runtime Monitoring | Detection of suspicious runtime behaviour |
 | Container security & image gate | Aqua Trivy image scan in CI, Amazon ECR | Vulnerable images blocked from the supply chain |
 | IaC & repo security gate | Checkov + Trivy FS scan in GitHub Actions | Misconfigurations caught before apply |
-| Centralized audit logging | Fluent Bit → Amazon OpenSearch SIEM, VPC Flow Logs | Preserved audit trail |
+| Centralized audit logging | Fluent Bit → Amazon CloudWatch Logs, VPC Flow Logs | Preserved audit trail |
 | Network | 3-tier VPC (module), NAT GW, WAFv2 | Perimeter defence and subnet isolation |
 | Deployment runbook | `docs/runbooks/eks-cloud-deployment.md` | Step-by-step with evidence capture points |
 
@@ -47,17 +47,17 @@ The platform is not a theoretical blueprint — every security control has been 
 
 The diagram below is the primary reference architecture for this platform. It illustrates the complete AWS EKS request path and all six control-plane flows — from public ingress through to observability — in a single view.
 
-![AWS EKS Hardened Infrastructure — Primary Architecture Diagram](assets/EKS.png)
+![AWS EKS Hardened Platform Reference Architecture](assets/EKS_Hardened_Architecture.png)
 
 ### Architecture Flow
 
 | Step | Component | Description |
 |---|---|---|
-| **①** | **Amazon Route 53** | Client requests resolved via Route 53 with health checking and low-latency latency-based DNS routing into `ap-northeast-1` |
+| **①** | **Amazon Route 53** | Client requests resolved via Route 53 with health checking and latency-based DNS routing into `ap-northeast-1` |
 | **②** | **Internet Gateway → AWS ALB** | Traffic enters the VPC via IGW and terminates at the **AWS Application Load Balancer** in the public subnet tier — TLS offload and path-based routing enforced at this boundary |
 | **③** | **ALB → App Pods (Target: IP Mode / AWS VPC CNI)** | ALB forwards directly to pod IP endpoints registered via **AWS VPC CNI** in IP target mode — eliminates double-hop NAT latency; pods receive real client IPs |
 | **④** | **HPA + Karpenter JIT Node Provisioning** | CPU load on `secure-api` pods triggers the **HPA** (`minReplicas: 2`, `maxReplicas: 10`); unschedulable pods signal **Karpenter** to provision EC2 **Bottlerocket** nodes on-demand within seconds |
-| **⑤** | **AWS KMS — etcd Envelope Encryption + IRSA** | All Kubernetes Secrets encrypted at rest in `etcd` via **AWS KMS CMK** envelope encryption; pod identity scoped to individual IAM roles via **OIDC/IRSA** — no static credentials |
+| **⑤** | **AWS KMS — etcd Envelope Encryption + IRSA** | All Kubernetes Secrets encrypted at rest in `etcd` via **AWS KMS CMK** envelope encryption; pod identity scoped to individual IAM roles via **OIDC/IRSA** — no static credentials, with fine-grained NetworkPolicy isolation enforced at the namespace boundary |
 | **⑥** | **Prometheus → Alertmanager (Observability)** | Prometheus scrapes `/metrics` from `secure-api` pods via the `ServiceMonitor` CRD (15 s interval); `PrometheusRule` recording rules pre-aggregate RED metrics; **Alertmanager** routes threshold violations with inhibition rules |
 
 > **Component scope:** VPC CIDR `10.0.0.0/16` (`ap-northeast-1`) · Public subnets (AZ-a, AZ-c) host IGW + NAT GW · Private subnets host Bottlerocket worker nodes + monitoring stack · EKS Managed Control Plane (API server + etcd) is AWS-managed and KMS-encrypted · Amazon ECR provides digest-pinned, Trivy-scanned image supply
@@ -66,25 +66,11 @@ The diagram below is the primary reference architecture for this platform. It il
 
 ## Architecture & Design Principles
 
-### Two-Tier Hybrid Validation Strategy
+### Multi-Tenant Isolation & Developer Spaces
+The platform provides isolated developer sandbox environments (`kubernetes/platform/developer-spaces/`) to enforce strict multi-tenancy and guardrails:
+- **Compute Quotas (`resource-quota.yaml`):** Restricts namespace resource consumption (CPU requests/limits, memory, max pod count) to prevent noisy-neighbor issues and starvation.
+- **Traffic Isolation (`network-policy.yaml`):** Enforces fine-grained network boundaries allowing ingress strictly from verified ingress controllers and egress to cluster DNS, preventing unauthorized lateral movement across tenant spaces.
 
-Risk and cost are reduced by validating all OS hardening patterns locally before incurring cloud spend:
-
-```
-+----------------------------+    +------------------------------+
-|  Tier 1: KVM (Hobgoblin)   | -> |  Tier 2: AWS EKS Prod        |
-|                            |    |                              |
-|  Terraform + libvirt       |    |  terraform-aws-modules       |
-|  Ubuntu 22.04 cloud-init   |    |  Bottlerocket node groups    |
-|  Bastion + control-plane   |    |  Private API (no public)     |
-|  cloud-init OS hardening   |    |  KMS CMKs, IRSA, GuardDuty   |
-|  k6 + HPA + Prometheus     |    |  VPC CNI eBPF, Karpenter+ALB |
-+----------------------------+    +------------------------------+
-```
-
-**Tier 1 — Hobgoblin KVM Lab topology:**
-
-![Hobgoblin Local Hypervisor Topology](assets/hob-lab2.png)
 
 
 ---
@@ -92,20 +78,18 @@ Risk and cost are reduced by validating all OS hardening patterns locally before
 ## Core Architecture Pillars
 
 ### Pillar 1 — Zero-Trust Networking
-
-A strict 3-tier VPC with no subnet promiscuity:
+A hardened 2-tier VPC architecture enforcing strict boundary isolation and kernel-level microsegmentation:
 
 | Tier | Subnet | Purpose | Route |
-|---|---|---|---|
-| Public | `public-subnet-*` | ALB + WAF termination only | IGW |
-| Private | `private-subnet-*` | EKS nodes, Karpenter pools | NAT GW |
-| Data | `data-subnet-*` | Amazon OpenSearch SIEM | Isolated (no route to IGW) |
+| :--- | :--- | :--- | :--- |
+| **Public (DMZ)** | `public-subnet-*` | AWS ALB + AWS WAFv2 termination & NAT Gateway | IGW (`0.0.0.0/0`) |
+| **Private** | `private-subnet-*` | EKS Control Plane, Bottlerocket worker nodes, Karpenter pools | NAT GW (Outbound only) |
 
-- **EKS API Endpoint:** Private-only (`cluster_endpoint_public_access = false`)
-- **AWS ALB Ingress Controller:** Provisioned via Terraform IRSA + Helm (v1.7.2), terminating TLS at the ALB boundary
-- **AWS WAFv2:** Managed rule sets attached — `AWSManagedRulesCommonRuleSet` (OWASP Top 10) + `AWSManagedRulesKnownBadInputsRuleSet` (Log4j / known bad inputs)
-- **VPC Flow Logs:** All traffic captured to CloudWatch Logs (30-day retention)
-- **Default Security Group hardened:** All ingress/egress blocked on the default SG
+- **EKS API Endpoint:** Private-only (`cluster_endpoint_public_access = false`), blocking all public internet exposure to the control plane.
+- **Perimeter Defense:** AWS WAFv2 attached to the ALB — enforcing `AWSManagedRulesCommonRuleSet` (OWASP Top 10) and `AWSManagedRulesKnownBadInputsRuleSet`.
+- **Direct-to-Pod Routing (IP Target Mode):** AWS Load Balancer Controller targets pod IPs directly via AWS VPC CNI, eliminating double-hop NAT and preserving client IP visibility.
+- **Kernel-Level Microsegmentation:** AWS VPC CNI configured with `enableNetworkPolicy=true`, enforcing default-deny ingress and cross-namespace traffic drops directly at the eBPF layer.
+- **Audit & Flow Telemetry:** VPC Flow Logs captured to CloudWatch Logs (30-day retention), alongside hardened default security groups (all ingress/egress blocked).
 
 ### Pillar 2 — Compute & Host Hardening
 
@@ -166,9 +150,15 @@ metadata:
     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/secure-api-irsa-role
 ```
 
-- **AWS KMS CMKs** provisioned for EKS envelope encryption and OpenSearch at-rest encryption, both with `enable_key_rotation = true`
+- **AWS KMS CMKs** provisioned for EKS envelope encryption with `enable_key_rotation = true`
 - **AWS GuardDuty** with `EKS_RUNTIME_MONITORING` and `EKS_ADDON_MANAGEMENT` features enabled for real-time behavioral threat detection
 - **AWS SSM** (`AmazonSSMManagedInstanceCore`) attached to Karpenter node IAM role — replacing SSH entirely for any operational access
+
+> **Architectural Decision · Runtime Security Strategy**
+>
+> For production EKS, we selected **AWS GuardDuty EKS Runtime Monitoring** together with **AWS VPC CNI eBPF NetworkPolicy** instead of standalone Falco DaemonSets.
+>
+> This reduces compute and daemon overhead on Bottlerocket nodes while avoiding the operational burden of managing a custom rule engine. It also relies on AWS-managed threat intelligence for kernel-level anomaly detection and streams telemetry directly into centralized CloudWatch auditing with minimal performance impact.
 
 ### Pillar 4 — GitOps & DevSecOps CI/CD Pipeline
 
@@ -192,17 +182,15 @@ Continuous Delivery is managed via declarative GitOps with ArgoCD, integrated se
            v
 [ ArgoCD: Drift detection & automated sync ]
            |
-    +------+------+
-    v             v
-[ KVM Local ]  [ AWS EKS Prod ]
- app-local.yaml  app-prod.yaml
+           v
+[ AWS EKS Prod (Hardened Bottlerocket) ]
+  kubernetes/apps/overlays/prod
 ```
 
 **ArgoCD Application manifests:**
 
 | App | Target Cluster | Kustomize Path | Sync Policy |
 |---|---|---|---|
-| `secure-api-local` | KVM / local | `kubernetes/apps/overlays/local` | Automated, selfHeal |
 | `secure-api-prod` | AWS EKS | `kubernetes/apps/overlays/prod` | Automated, prune, selfHeal |
 | `kube-prometheus-stack` | AWS EKS | `prometheus-community` Helm chart v61.3.1 | Automated, ServerSideApply |
 
@@ -232,12 +220,12 @@ The monitoring stack (`kube-prometheus-stack`) is deployed via the ArgoCD Helm s
             |   FastAPI /cpu-burn   |  <- Prometheus /metrics endpoint
             |   (secure-api)        |     exposed via ServiceMonitor (15s interval)
             +-----------+-----------+
-                        | CPU > 50% (local) / 60% (prod)
+                        | CPU > 60% (Target Threshold)
                         v
           +-----------------------------+
           |  HPA — Tier 1 Pod Scaling   |  autoscaling/v2, CPU metric
-          |  minReplicas: 2             |  Scales: 2 -> 8 (local)
-          |  maxReplicas: 10            |          2 -> 10 (prod)
+          |  minReplicas: 2             |  Scales: 2 -> 10 replicas
+          |  maxReplicas: 10            |         
           +-------------+---------------+
                         | Pods Pending (insufficient node capacity)
                         v
@@ -261,8 +249,8 @@ The monitoring stack (`kube-prometheus-stack`) is deployed via the ArgoCD Helm s
 | ServiceMonitor | `secure-api-monitor` scraping `/metrics` every 15s | `release: monitoring` label for autodiscovery |
 | FastAPI Instrumentation | `prometheus-fastapi-instrumentator` | Exposes RED metrics at `/metrics` |
 | Metrics Server | `kubernetes/observability/metrics-server.yaml` | Required for HPA CPU metric pipeline |
-| Fluent Bit | DaemonSet in `kube-system` | Non-root, read-only FS, ALL capabilities dropped; ships logs to OpenSearch |
-| Amazon OpenSearch | `aws_opensearch_domain.siem` — `t3.small.search` | KMS encrypted, VPC-only, TLS 1.2+ enforced |
+| Fluent Bit | DaemonSet in `kube-system` | Non-root, read-only FS, ALL capabilities dropped; ships logs to CloudWatch |
+| Amazon CloudWatch | `/aws/eks/eks-hardened-prod/containers` | KMS CMK encrypted, 30-day retention, audit trail aggregation |
 
 #### Phase 6 Validation Evidence
 
@@ -284,9 +272,6 @@ The monitoring stack (`kube-prometheus-stack`) is deployed via the ArgoCD Helm s
 
 ![k6 Spike Load Test Results](assets/hpa-result.png)
 
-**KVM Cluster Evidence — Prometheus + HPA running live on Hobgoblin sandbox (Tier 1):**
-
-![KVM Lab Cluster — Prometheus and HPA validation](assets/kvm-evidence.png)
 
 **k6 spike test profile (`tests/spike-test.js`):**
 
@@ -308,24 +293,13 @@ export const options = {
 
 ## Proof of Work — Deployment Evidence
 
-> The six evidence items below (E-01 – E-06) constitute end-to-end operational evidence of the AWS EKS platform lifecycle: IaC provisioning → node readiness → ingress provisioning → observability validation → clean teardown → Bottlerocket hardening & eBPF network policy. Every artefact was captured live from the production cluster (`eks-hardened-prod`, `ap-northeast-1`) and the Hobgoblin KVM sandbox. No screenshots are mocked or staged.
-
-### Evidence Summary Table
-
-| ID | Phase | Description | Key Signal | Asset |
-|---|---|---|---|---|
-| E-01 | Phase 1 — IaC Automation | Terraform apply completes against AWS EKS | `Apply complete! Resources: 1 added` (Karpenter Helm release — final incremental apply) | ![](assets/terraform-applied.png) |
-| E-02 | Phase 2 — Compute Hardening | `kubectl get nodes -o wide` confirming Bottlerocket OS on all worker nodes | `OS-IMAGE: Bottlerocket OS 1.63.0 (aws-k8s-1.30)` · Node status `Ready` | ![](assets/bottlerocket.png) |
-| E-03 | Phase 3 — Ingress Provisioning | AWS ALB provisioned by Load Balancer Controller; application pods serving traffic | `ADDRESS: k8s-default-secureap-7ccd2624ee-13995771.ap-northeast-1.elb.amazonaws.com` | ![](assets/Ingress-Pod-Ready.png) |
-| E-04 | Phase 4 — Observability | Prometheus PromQL recording rule `job:http_requests_total:rate5m` returning live result series | 4 series across handlers (`/healthz`, `/metrics`, `/`, `none`) and status codes (`2xx`, `4xx`) | ![](assets/Prometheus-Rate5m.png) |
-| E-05 | Phase 5 — Clean Teardown | `terraform destroy` completes with zero dangling resources | `Destroy complete! Resources: 99 destroyed.` | ![](assets/Terraform-Destroy-Complete.png) |
-| E-06 | Phase 6 — Bottlerocket Hardening & eBPF Network Policy | Zero-SSH node administration and kernel-level ingress traffic filtering | Verified Bottlerocket via SSM/sheltie + NetworkPolicy packet drop via eBPF (`exit code 28`) | [![](assets/02-default-deny-netpol.png)](#e-06--phase-6--bottlerocket-hardening--ebpf-network-policy) |
+> The six evidence items below (E-01 – E-06) constitute end-to-end operational evidence of the AWS EKS platform lifecycle: IaC provisioning → node readiness → ingress provisioning → observability validation → clean teardown → Bottlerocket hardening & eBPF network policy. Every artefact was captured live from the AWS EKS production cluster (eks-hardened-prod, ap-northeast-1). No screenshots are mocked or staged.
 
 ---
 
 ### E-01 · Phase 1 — Terraform Apply Complete
 
-> **What it proves:** Terraform-managed IaC against real AWS APIs. The Karpenter Helm release (`Creation complete after 16s [id=karpenter]`) confirms the full EKS add-on stack — VPC, EKS control plane, managed node group, IRSA, AWS Load Balancer Controller, Karpenter, GuardDuty, WAFv2, KMS CMKs, and Amazon OpenSearch — applied without error.
+> **What it proves:** Terraform-managed IaC against real AWS APIs. The Karpenter Helm release (`Creation complete after 16s [id=karpenter]`) confirms the full EKS add-on stack — VPC, EKS control plane, managed node group, IRSA, AWS Load Balancer Controller, Karpenter, GuardDuty, WAFv2, KMS CMKs, and Amazon CloudWatch Logs — applied without error.
 
 ![Terraform Apply Complete — Karpenter Helm release creation confirmed](assets/terraform-applied.png)
 
@@ -393,7 +367,6 @@ export const options = {
 
 > The EKS VPC CNI add-on is configured with `enableNetworkPolicy=true`, so policies are enforced by eBPF programs attached in the kernel, without a user-space proxy or sidecar overhead.
 
-![EKS cluster configuration for eBPF-based network policy](assets/02-eks-ebpf.png)
 
 ![VPC CNI add-on configuration — enableNetworkPolicy=true](assets/02-enable-netpol-true.png)
 
@@ -410,162 +383,14 @@ export const options = {
 | Network Perimeter | 3-tier VPC, WAFv2 (OWASP CRS + Bad Inputs), private API endpoint | Unauthorized control-plane access, injection attacks | Terraform spec / AWS CLI / WAF metrics |
 | Compute Integrity | Bottlerocket OS (read-only root, no shell), seccomp `RuntimeDefault` | Host compromise, container escape | CIS benchmarks / node spec / admission policy |
 | Identity & Access | IRSA per-workload (OIDC), GuardDuty EKS Runtime Monitoring | Credential leakage, lateral movement | IAM policy audit / CloudTrail |
-| Data Protection | AWS KMS CMKs (auto-rotation), OpenSearch encrypt-at-rest, TLS 1.2+ | Unencrypted secrets, data exfiltration | KMS policy / `aws kms describe-key` |
+| Data Protection | AWS KMS CMKs (auto-rotation), CloudWatch encrypt-at-rest, TLS 1.2+ | Unencrypted secrets, data exfiltration | KMS policy / `aws kms describe-key` |
 | CI/CD & Pipeline Security | Aqua Trivy (FS + Image scan), Checkov IaC scanner, non-root multi-stage | Vulnerable dependencies, misconfigured IaC, container privilege escalation | GitHub Actions CI logs / Security tab |
-| Observability | Prometheus + Grafana, Fluent Bit -> OpenSearch SIEM, VPC Flow Logs | Blind spots, undetected runtime anomalies | Grafana dashboards / OpenSearch indices |
+| Observability | Prometheus + Grafana, Fluent Bit -> CloudWatch Logs, VPC Flow Logs | Blind spots, undetected runtime anomalies | Grafana dashboards / CloudWatch log groups |
 | Availability | HPA (pod-level), Karpenter (node-level), PDB, RollingUpdate, preStop | Single-pod SPOF, over-provisioning cost | k6 spike test — 4,635 reqs, 0% error |
-| Logging | VPC Flow Logs (CloudWatch), Fluent Bit DaemonSet (OpenSearch) | Audit gap, forensic loss | CloudWatch log group / OpenSearch index |
+| Logging | VPC Flow Logs (CloudWatch), Fluent Bit DaemonSet (CloudWatch) | Audit gap, forensic loss | CloudWatch log groups (`/aws/eks/...`, `/aws/vpc/...`) |
 
 ---
 
-## Repository Structure
-
-```text
-Cloud-Native-Hardened-Infrastructure/
-|
-+-- .github/
-|   +-- workflows/
-|       +-- ci-devsecops.yml          # Trivy FS scan + Docker build + Trivy image scan + GitOps tag bump
-|       +-- checkov-scan.yaml         # Standalone Checkov IaC hardening scan
-|       +-- deploy.yml                # Image build, Trivy image scan, ECR deploy
-|
-+-- app/                              # FastAPI microservice (the workload under test)
-|   +-- main.py                       # /healthz, /cpu-burn, /metrics (prometheus-fastapi-instrumentator)
-|   +-- Dockerfile                    # Multi-stage python:3.11-slim, UID 10001, no build tools in final
-|   +-- requirements.txt
-|
-+-- tests/
-|   +-- spike-test.js                 # k6 spike test: 60 VUs, /cpu-burn, 2-min profile
-|
-+-- cloud-init/                       # KVM Tier-1 sandbox OS hardening
-|   +-- bastion.cfg
-|   +-- k8s-control-plane.cfg
-|
-+-- docs/
-|   +-- runbooks/
-|       +-- eks-cloud-deployment.md   # AWS EKS: deploy & teardown checklist (5 evidence screenshots)
-|
-+-- kubernetes/
-|   +-- apps/
-|   |   +-- base/                     # Cloud-agnostic Kustomize base (shared by all overlays)
-|   |   |   +-- deployment.yaml       # secure-api: RollingUpdate, probes, resource limits
-|   |   |   +-- service.yaml          # ClusterIP service on port 80 -> 8000
-|   |   |   +-- pdb.yaml              # PodDisruptionBudget
-|   |   |   +-- kustomization.yaml
-|   |   +-- overlays/
-|   |       +-- local/                # KVM sandbox overlay (Tier 1 validation)
-|   |       |   +-- secure-api.yaml
-|   |       |   +-- patch-service.yaml
-|   |       |   +-- kustomization.yaml
-|   |       +-- prod/                 # AWS EKS overlay (Tier 2)
-|   |       |   +-- patch-deployment.yaml  # Pod security context: non-root, seccomp, caps drop
-|   |       |   +-- serviceaccount.yaml    # IRSA annotation -> eks.amazonaws.com/role-arn
-|   |       |   +-- hpa.yaml               # HPA: min=2, max=10, CPU=60%
-|   |       |   +-- ingress.yaml           # AWS ALB Ingress (IP target mode)
-|   |       |   +-- kustomization.yaml
-|   |
-|   +-- argocd/                       # GitOps Application manifests
-|   |   +-- app-local.yaml
-|   |   +-- app-prod.yaml             # ArgoCD App -> AWS EKS (prune + selfHeal)
-|   |   +-- monitoring-app.yaml       # kube-prometheus-stack v61.3.1
-|   |
-|   +-- karpenter/                    # JIT node provisioning (AWS EKS Tier 2)
-|   |   +-- karpenter-nodepool.yaml
-|   |   +-- karpenter-ec2nodeclass.yaml
-|   |
-|   +-- security/
-|   |   +-- kyverno-cosign.yaml       # Admission control policy template (reference)
-|   |
-|   +-- observability/
-|       +-- metrics-server.yaml
-|       +-- fluent-bit.yaml
-|       +-- servicemonitor.yaml
-|       +-- prometheusrule.yaml
-|       +-- alertmanagerconfig.yaml
-|
-+-- terraform/
-|   +-- environments/
-|   |   +-- prod/                     # AWS EKS root module (Tier 2)
-|   |   |   +-- main.tf               # Wires: vpc + eks + security + observability + ecr
-|   |   |   +-- providers.tf
-|   |   |   +-- variables.tf
-|   |   +-- local-hob/                # KVM Hobgoblin sandbox root module (Tier 1)
-|   |       +-- main.tf
-|   |       +-- variables.tf
-|   |
-|   +-- modules/                      # AWS-specific reusable modules
-|       +-- vpc/                      # 3-tier VPC: public/private/data subnets, NAT GW, Flow Logs
-|       +-- eks/                      # EKS + Karpenter + AWS LB Controller
-|       +-- security/                 # WAFv2, GuardDuty
-|       +-- observability/            # AWS KMS CMKs + Amazon OpenSearch SIEM
-|       +-- compute/                  # KVM VMs via libvirt
-|       +-- ecr/                      # Amazon ECR
-|       +-- network/                  # KVM virtual network
-|
-+-- assets/                           # Architecture diagrams & validation evidence
-|   +-- EKS.png                       # PRIMARY: End-to-end AWS EKS architecture flow (6-step annotated)
-|   +-- terraform-applied.png         # E-01: Terraform apply complete (Karpenter Helm release)
-|   +-- bottlerocket.png              # E-02: Bottlerocket OS 1.63.0 on all EKS nodes
-|   +-- Ingress-Pod-Ready.png         # E-03: AWS ALB provisioned, application pods 1/1 Running
-|   +-- Prometheus-Rate5m.png         # E-04: PromQL recording rule job:http_requests_total:rate5m
-|   +-- Terraform-Destroy-Complete.png  # E-05: terraform destroy — 99 resources destroyed
-|   +-- 02-bottleRocket-select.png    # E-06: Bottlerocket AMI selection
-|   +-- 02-get-nodes-owide.png        # E-06: Bottlerocket OS 1.68.1 node verification
-|   +-- 02-ssm-2-bottlerocket.png     # E-06: SSM -> admin container -> sheltie, /sys/fs/bpf
-|   +-- 02-eks-ebpf.png               # E-06: EKS eBPF network policy configuration
-|   +-- 02-enable-netpol-true.png     # E-06: VPC CNI enableNetworkPolicy=true
-|   +-- 02-default-deny-netpol.png    # E-06: default-deny-ingress, exit code 28
-|   +-- grafana.png                   # Phase 6: HPA scale-out & CPU utilisation dashboard
-|   +-- hpa-result.png                # Phase 6: k6 spike test — 4,635 reqs, 0% error
-|   +-- kvm-evidence.png              # Phase 6: KVM Tier-1 Prometheus + HPA live validation
-|   +-- AWS_EKS_Architecture.png      # Generated architecture diagram
-|   +-- hob-lab2.png                  # Hobgoblin KVM lab topology
-|
-+-- .trivyignore
-+-- .gitignore
-+-- README.md
-+-- README.ja.md
-```
-
----
-
-## DevSecOps CI/CD Pipeline
-
-```
-+-------------------------------------------------------------------+
-|                    GitHub Actions Trigger                         |
-|         Push to main (app/**) or workflow_dispatch                |
-+--------------------------------+----------------------------------+
-                                 |
-                     +-----------v-----------+
-                     |  1. Trivy FS Scan      |  CRITICAL/HIGH -> exit-code 1
-                     |  (ci-devsecops.yml)    |  blocks merge on failure
-                     +-----------+-----------+
-                                 |
-                     +-----------v-----------+
-                     |  2. Checkov IaC Scan   |  Terraform hardening rules
-                     |  (checkov-scan.yaml)   |  accepted skips documented inline
-                     +-----------+-----------+
-                                 |
-                     +-----------v-----------+
-                     |  3. Docker Build       |  python:3.11-slim multi-stage
-                     |  (deploy.yml)          |  UID 10001, no build tools in final
-                     +-----------+-----------+
-                                 |
-                     +-----------v-----------+
-                     |  4. Trivy Image Scan   |  Scans final layer before push
-                     +-----------+-----------+
-                                 |
-                     +-----------v-----------+
-                     |  5. ECR Push           |  AWS OIDC (no stored credentials)
-                     |  (via OIDC role)       |  Least-privilege registry auth
-                     +-----------+-----------+
-                                 |
-                     +-----------v-----------+
-                     |  6. GitOps Tag Bump    |  kustomize edit set image
-                     |  (Kustomize + git push)|  ArgoCD detects -> auto-sync
-                     +-----------------------+
-```
 
 ---
 
@@ -640,7 +465,7 @@ argocd app list
 |---|---|---|
 | CKA (Certified Kubernetes Administrator) | ✅ Certified 2026 | — |
 | AWS EKS hardened baseline (Bottlerocket, IRSA, KMS, WAFv2, GuardDuty) | ✅ Deployed & validated | E-01 – E-06 (see [Proof of Work](#proof-of-work--deployment-evidence)) · Phase 6: 4,635 reqs, 0% error |
-| Full-stack observability (Prometheus, Grafana, Fluent Bit → OpenSearch) | ✅ Validated | E-04: PromQL `job:http_requests_total:rate5m` · Grafana HPA dashboard |
+| Full-stack observability (Prometheus, Grafana, Fluent Bit → CloudWatch Logs) | ✅ Validated | E-04: PromQL `job:http_requests_total:rate5m` · Grafana HPA dashboard |
 | Deployment runbooks with evidence capture | ✅ Committed | `docs/runbooks/` · [Proof of Work](#proof-of-work--deployment-evidence) |
 
 ### 📊 Observability Evidence — PCA-Aligned (No Exam Planned)

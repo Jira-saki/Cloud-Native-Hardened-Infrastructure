@@ -12,12 +12,12 @@ spec:
         runAsUser: 10001
         fsGroup: 10001
         seccompProfile:
-          type: RuntimeDefault
+          type: RuntimeDefault # RuntimeDefault seccomp profile
       containers:
         - name: secure-api
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
+            readOnlyRootFilesystem: true   # ReadOnlyRootFilesystem
             capabilities:
               drop:
-                - ALL
+                - ALL  # drop all capabilities

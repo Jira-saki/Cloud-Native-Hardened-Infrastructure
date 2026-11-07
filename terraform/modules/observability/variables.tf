@@ -1,9 +1,3 @@
-variable "domain_name" {
-  description = "OpenSearch domain name"
-  type        = string
-  default     = "eks-siem-logs"
-}
-
 variable "vpc_id" {
   description = "VPC ID"
   type        = string

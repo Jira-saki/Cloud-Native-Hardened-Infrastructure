@@ -42,7 +42,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
-          scan-ref: '.'
+          scan-ref: 'terraform/'
           hide-progress: true
           format: 'table'
           exit-code: '1'

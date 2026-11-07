@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write   # สำหรับ AWS OIDC & Cosign Keyless
-  contents: write   # สำหรับ Auto-commit อัปเดต Image Tag ใน GitOps Repo
+  id-token: write   # for OIDC authentication with AWS
+  contents: write   # for pushing changes to the repository (e.g., updating Kustomize image tags)
   security-events: write
 
 jobs:
@@ -29,13 +29,14 @@ jobs:
           ignore-unfixed: true
           format: 'table'
           severity: 'CRITICAL,HIGH'
+          exit-code: '1'
 
-      # AWS Production Steps (Uncomment เมื่อรันบน AWS)
+      # AWS Production Steps 
       # - name: Configure AWS Credentials (OIDC)
       #   uses: aws-actions/configure-aws-credentials@v4
       #   with:
       #     role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/github-actions-ecr-role
-      #     aws-region: us-east-1
+      #     aws-region: ap-northeast-1
 
       # - name: Login to Amazon ECR
       #   id: login-ecr
@@ -52,10 +53,12 @@ jobs:
       #     cosign sign --yes $ECR_REGISTRY/secure-api:$IMAGE_TAG
 
       # - name: Update GitOps Kustomize Tag
+      #   env:
+      #     ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
       #   run: |
       #     cd kubernetes/apps/overlays/prod
       #     kustomize edit set image secure-api=$ECR_REGISTRY/secure-api:${{ github.sha }}
       #     git config user.name "github-actions[bot]"
       #     git config user.email "github-actions[bot]@users.noreply.github.com"
       #     git commit -am "chore(gitops): bump image to ${{ github.sha }}"
-      #     git push
+      #     git push origin main
